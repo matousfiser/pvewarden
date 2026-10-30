@@ -1,0 +1,51 @@
+# pvewarden server configuration (/etc/pvewarden/config.toml).
+# Readable only by root and the pvewarden service user: it contains secrets.
+
+# Audit log, per-run update logs and SSH known_hosts
+state_dir = "/var/lib/pvewarden"
+
+[proxmox]
+# Must match a name in the Proxmox certificate (map it in /etc/hosts if needed)
+host = "pve.example.lan"
+port = 8006
+# API token of a user whose role is granted only on the pvewarden pool
+token_id = "pvewarden@pve!server"
+# Or set $PVEWARDEN_PROXMOX_TOKEN_SECRET instead
+token_secret = "CHANGE_ME"
+# CA bundle for the Proxmox certificate (copy of /etc/pve/pve-root-ca.pem), or true / false
+verify_tls = "/etc/pvewarden/pve-root-ca.pem"
+
+[ssh]
+user = "pvewarden"
+key = "/etc/pvewarden/id_ed25519"
+# Prefer guest addresses from these networks (guest agent / LXC may report several)
+subnets = ["192.0.2.0/24"]
+parallel = 5
+connect_timeout = 10
+
+[policy]
+tag_update = "pvewarden-update"
+tag_reboot = "pvewarden-reboot"
+
+[http]
+# Address to listen on: keep it on a VPN or management network
+listen = "192.0.2.10"
+port = 8765
+
+[http.clients]
+# name = "token" (at least 32 characters); the name is written to the audit log.
+# Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+agent = "CHANGE_ME"
+
+# Optional fixed guest addresses, when discovery is not enough
+# [addresses]
+# 108 = "192.0.2.45"
+
+# Testing without Proxmox: drop [proxmox] and list guests by hand.
+# Snapshots, reboots and rollbacks are unavailable in this mode.
+# [[static_guests]]
+# vmid = 1
+# name = "test"
+# address = "192.0.2.50"
+# type = "lxc"
+# tags = ["pvewarden-update"]

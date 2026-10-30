@@ -1,0 +1,10 @@
+# /etc/pvewarden/enroll.conf on the Proxmox host. No secrets: only the server's PUBLIC key.
+
+# Content of /etc/pvewarden/id_ed25519.pub on the pvewarden server
+PUBKEY="ssh-ed25519 AAAA... pvewarden@pvewarden"
+
+# Address the pvewarden server connects to guests from (authorized_keys from=)
+FROM="192.0.2.10"
+
+# Proxmox pool that limits what the server's API token can see and control
+POOL="pvewarden"
