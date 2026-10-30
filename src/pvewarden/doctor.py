@@ -172,7 +172,7 @@ async def _check_proxmox(app: App) -> list[Result]:
             missing[g.vmid] = sorted(lacking)
     if missing:
         detail = "; ".join(f"{vmid}: {', '.join(p)}" for vmid, p in missing.items())
-        out.append(fail("Token privileges", detail, "update the PVEWarden role (see the installation docs)"))
+        out.append(fail("Token privileges", detail, "update the Warden role (see the installation docs)"))
     else:
         out.append(ok("Token privileges", "all required privileges present"))
 

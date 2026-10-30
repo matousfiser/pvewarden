@@ -41,7 +41,7 @@ esac
 esac
 """,
     "pveum": """case "$1 $2" in
-  "role list") [ -f "$FAKE/role" ] && echo '[{"roleid":"PVEWarden"}]' || echo '[{"roleid":"PVEAdmin"}]' ;;
+  "role list") [ -f "$FAKE/role" ] && echo '[{"roleid":"Warden"}]' || echo '[{"roleid":"PVEAdmin"}]' ;;
   "user token") [ "$3" = add ] && echo '{"full-tokenid":"pvewarden@pve!server","value":"'"$FAKE_SECRET"'"}' ;;
 esac
 """,
@@ -180,10 +180,10 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
         assert part in create, part
 
     assert (
-        "pveum role add PVEWarden --privs VM.Audit,VM.Snapshot,VM.Snapshot.Rollback,VM.PowerMgmt,VM.GuestAgent.Audit"
+        "pveum role add Warden --privs VM.Audit,VM.Snapshot,VM.Snapshot.Rollback,VM.PowerMgmt,VM.GuestAgent.Audit"
         in calls
     )
-    assert "pveum acl modify /pool/pvewarden --users pvewarden@pve --roles PVEWarden" in calls
+    assert "pveum acl modify /pool/pvewarden --users pvewarden@pve --roles Warden" in calls
     assert "pveum user token add pvewarden@pve server --privsep 0 --output-format json" in calls
 
     # secrets: password only via stdin, token secret only in the pushed config
@@ -208,6 +208,12 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
     assert (host.path / "opt/proxmox/pvewarden-enroll").exists()
 
 
+def test_role_name_is_allowed_by_proxmox():
+    # Proxmox rejects role IDs starting with "PVE" (any case): that prefix is reserved for built-in roles
+    role = re.search(r"^ROLE=(\S+)", (ROOT / "proxmox/pvewarden-setup").read_text(), re.M).group(1)
+    assert not role.lower().startswith("pve")
+
+
 def test_pve8_gets_the_old_guest_agent_privilege_and_debian_12(host):
     r = host.run("install", "--yes", **INSTALL_ENV, FAKE_PVE_VERSION="8.2.7")
     assert r.returncode == 0, r.stderr
@@ -220,7 +226,7 @@ def test_existing_role_is_updated_not_duplicated(host):
     host.mark("role", "pool", "user")
     assert host.run("install", "--yes", **INSTALL_ENV).returncode == 0
     calls = host.calls()
-    assert any(c.startswith("pveum role modify PVEWarden") for c in calls)
+    assert any(c.startswith("pveum role modify Warden") for c in calls)
     assert not any(c.startswith(("pveum role add", "pveum pool add", "pveum user add")) for c in calls)
 
 
@@ -356,7 +362,7 @@ def test_uninstall_removes_access_and_keeps_container_unless_asked(host):
     assert r.returncode == 0, r.stderr
     calls = host.calls()
     assert "ENROLL --uninstall --all" in calls
-    assert "pveum user delete pvewarden@pve" in calls and "pveum role delete PVEWarden" in calls
+    assert "pveum user delete pvewarden@pve" in calls and "pveum role delete Warden" in calls
     assert "pveum pool modify pvewarden --vms 101,102 --delete 1" in calls and "pveum pool delete pvewarden" in calls
     assert not any(c.startswith("pct destroy") for c in calls)
     assert "container 120 was kept" in r.stdout
