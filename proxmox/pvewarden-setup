@@ -224,21 +224,57 @@ ask_container() {
   if [ -n "$ROOT_PASSWORD" ] && [ ${#ROOT_PASSWORD} -lt 5 ]; then die "the password must have at least 5 characters"; fi
   local default_keys=""
   [ -s /root/.ssh/authorized_keys ] && default_keys=/root/.ssh/authorized_keys
-  ask SSH_KEYS "SSH public keys for root in the container: a file with keys, or paste one key.\nEmpty = none." "$default_keys"
-  SSH_KEYS_FILE=""
-  if [ -n "$SSH_KEYS" ]; then
-    if [ -f "$SSH_KEYS" ]; then
-      SSH_KEYS_FILE=$SSH_KEYS
-    else
-      case "$SSH_KEYS" in
-        ssh-* | ecdsa-*) printf '%s\n' "$SSH_KEYS" > "$WORK/authorized_keys" && SSH_KEYS_FILE=$WORK/authorized_keys ;;
-        *) die "not a file and not an SSH public key: $SSH_KEYS" ;;
-      esac
-    fi
-  fi
+  ask SSH_KEYS "SSH public keys for root in the container. One or more of, separated by spaces:\n  gh:USER       keys from github.com/USER.keys\n  gl:USER       keys from gitlab.com/USER.keys\n  https://...   a URL with keys\n  /path/file    a file with keys\nor paste a single key. Empty = none." "$default_keys"
+  collect_ssh_keys "$SSH_KEYS"
 
   pvesh get "/nodes/$NODE/lxc/$CTID/status/current" >/dev/null 2>&1 && die "ID $CTID is already in use"
   return 0
+}
+
+is_key() { case "$1" in ssh-* | ecdsa-* | sk-*) return 0 ;; *) return 1 ;; esac; }
+
+# Collect SSH public keys from gh:/gl: users, https URLs, files or a pasted key into one file.
+# Every line must be a valid public key; fingerprints are shown in the summary before anything
+# is created, because these keys get root in the container.
+collect_ssh_keys() {
+  SSH_KEYS_FILE="" SSH_KEYS_SUMMARY="none"
+  [ -n "$1" ] || return 0
+  local out=$WORK/authorized_keys src url
+  : > "$out"
+  if is_key "$1"; then
+    printf '%s\n' "$1" > "$out"
+  else
+    for src in $1; do
+      case "$src" in
+        gh:*) url="https://github.com/${src#gh:}.keys" ;;
+        gl:*) url="https://gitlab.com/${src#gl:}.keys" ;;
+        https://*) url=$src ;;
+        http://*) die "refusing to fetch SSH keys over plain http: $src" ;;
+        *) url="" ;;
+      esac
+      if [ -n "$url" ]; then
+        curl -fsSL --max-time 20 "$url" > "$WORK/fetched" || die "could not fetch SSH keys from $url"
+        grep -q . "$WORK/fetched" || die "no SSH keys published at $url"
+        cat "$WORK/fetched" >> "$out"
+      elif [ -f "$src" ]; then
+        cat "$src" >> "$out"
+      else
+        die "not a key source (gh:USER, gl:USER, https://..., file, or a pasted key): $src"
+      fi
+    done
+  fi
+  local line fps="" n=0
+  while IFS= read -r line; do
+    case "$line" in "" | "#"*) continue ;; esac
+    is_key "$line" || die "not an SSH public key: ${line:0:60}"
+    printf '%s\n' "$line" > "$WORK/one.pub"
+    fps+="
+                       $(ssh-keygen -lf "$WORK/one.pub")" || die "invalid SSH public key: ${line:0:60}"
+    n=$((n + 1))
+  done < "$out"
+  [ "$n" -gt 0 ] || die "no SSH keys found in: $1"
+  SSH_KEYS_FILE=$out
+  SSH_KEYS_SUMMARY="$n key(s) from $1$fps"
 }
 
 ask_access() {
@@ -264,7 +300,7 @@ Container
   network              $BRIDGE${VLAN:+ vlan $VLAN}, IPv4 $IP${GW:+ via $GW}${IP6:+, IPv6 $IP6}
   DNS                  ${NAMESERVER:-as host}${SEARCHDOMAIN:+, search $SEARCHDOMAIN}
   root password        $([ -n "$ROOT_PASSWORD" ] && echo set || echo none)
-  SSH keys             ${SSH_KEYS:-none}
+  SSH keys             $SSH_KEYS_SUMMARY
   start on boot        $([ "$ONBOOT" = 1 ] && echo yes || echo no)
 Server
   agents connect via   $([ "$USE_TLS" = yes ] && echo https || echo http)://${LISTEN:-<container IP>}:8765/mcp
