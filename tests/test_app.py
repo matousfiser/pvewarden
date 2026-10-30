@@ -1,0 +1,211 @@
+import pytest
+from conftest import RBT, UPD, FakeRunner
+
+from pvewarden.app import SNAPSHOT_PREFIX, App
+from pvewarden.config import parse
+from pvewarden.errors import GuestError, InvalidRequestError, NotFoundError, PolicyError, ProxmoxError
+
+# --- inventory, permissions, addresses -----------------------------------------------------
+
+
+async def test_describe_permissions(app):
+    g = await app.guest(101)
+    assert app.describe(g) | {} == {
+        "vmid": 101,
+        "name": "web",
+        "type": "lxc",
+        "node": "pve1",
+        "status": "running",
+        "tags": [UPD, RBT],
+        "may_update": True,
+        "may_reboot": True,
+        "source": "proxmox",
+    }
+    assert app.describe(await app.guest(103))["may_update"] is False
+
+
+async def test_unknown_guest(app):
+    with pytest.raises(NotFoundError):
+        await app.guest(999)
+
+
+async def test_address_skips_loopback_and_prefers_subnet(app):
+    assert await app.address(await app.guest(101)) == "192.0.2.11"
+
+
+async def test_address_override_and_dns_fallback(app):
+    app.cfg.addresses[102] = "198.51.100.7"
+    assert await app.address(await app.guest(102)) == "198.51.100.7"
+    del app.pve.ips[103]  # no guest agent: fall back to the guest name
+    assert await app.address(await app.guest(103)) == "readonly"
+
+
+async def test_address_outside_subnet_is_not_used(app):
+    app.pve.ips[103] = ["10.9.9.9"]
+    assert await app.address(await app.guest(103)) == "readonly"
+
+
+# --- check_updates -------------------------------------------------------------------------
+
+
+async def test_check_updates_summary(app):
+    results = {r["vmid"]: r for r in await app.check_updates()}
+    assert set(results) == {101, 102, 103}  # 104 is stopped
+    r = results[101]
+    assert (r["pending"], r["pending_security"], r["pending_official"]) == (3, 1, 2)
+    assert [p["name"] for p in r["third_party_report_only"]] == ["docker-ce"]
+    assert r["os"] == "Ubuntu 24.04.1 LTS"
+    assert r["reboot_required"] is False
+
+
+async def test_check_updates_isolates_failing_guest(app):
+    app.runner.responses["check"] = lambda addr: (255, "Permission denied") if addr == "192.0.2.12" else (0, "")
+    results = {r["vmid"]: r for r in await app.check_updates([101, 102])}
+    assert "Permission denied" in results[102]["error"]
+    assert results[101]["pending"] == 0
+
+
+async def test_check_updates_detects_outdated_client(app):
+    app.runner.responses["check"] = (0, "openssl/noble-security 3.0.13 amd64 [upgradable from: 3.0.12]\n")
+    (r,) = await app.check_updates([101])
+    assert "outdated" in r["error"]
+
+
+async def test_check_updates_unknown_vmid(app):
+    with pytest.raises(NotFoundError):
+        await app.check_updates([101, 999])
+
+
+# --- apply_updates -------------------------------------------------------------------------
+
+
+async def test_apply_updates_requires_tag(app):
+    with pytest.raises(PolicyError, match=UPD):
+        await app.apply_updates(103)
+    assert app.runner.calls == []
+
+
+async def test_apply_updates_snapshots_first_then_upgrades(app):
+    res = await app.apply_updates(101, "all")
+    assert res["ok"] is True
+    assert res["snapshot"].startswith(SNAPSHOT_PREFIX)
+    assert app.pve.events == [("snapshot", 101, res["snapshot"])]
+    assert app.runner.commands() == ["services", "upgrade-all", "status", "services"]
+    assert res["newly_failed_services"] == []
+    log = app.runs_dir / res["log"].rsplit("/", 1)[1]
+    assert log.read_text() == "All upgrades installed\n"
+
+
+async def test_apply_updates_aborts_when_snapshot_fails(app):
+    app.pve.fail_snapshot = True
+    with pytest.raises(ProxmoxError):
+        await app.apply_updates(101)
+    assert app.runner.calls == []
+
+
+async def test_apply_updates_reports_newly_failed_services(app):
+    outputs = iter(
+        [
+            (0, "system=running\nfailed=old.service\n"),
+            (0, "system=degraded\nfailed=old.service\nfailed=nginx.service\n"),
+        ]
+    )
+    app.runner.responses["services"] = lambda addr: next(outputs)
+    res = await app.apply_updates(101, snapshot=False)
+    assert res["snapshot"] is None and app.pve.events == []
+    assert res["newly_failed_services"] == ["nginx.service"]
+
+
+async def test_apply_updates_refuses_stopped_guest_and_bad_mode(app):
+    with pytest.raises(GuestError, match="stopped"):
+        await app.apply_updates(104)
+    with pytest.raises(InvalidRequestError):
+        await app.apply_updates(101, mode="dist-upgrade")
+
+
+async def test_apply_updates_is_audited(app):
+    await app.apply_updates(101)
+    actions = [line for line in app.audit.path.read_text().splitlines()]
+    assert any('"action": "apply_updates"' in a and '"vmid": 101' in a for a in actions)
+
+
+# --- reboot, snapshots, rollback ------------------------------------------------------------
+
+
+async def test_reboot_requires_reboot_tag(app):
+    with pytest.raises(PolicyError, match=RBT):
+        await app.reboot(102)
+    assert app.pve.events == []
+
+
+async def test_reboot_waits_until_guest_answers(app):
+    attempts = iter([(255, "Connection refused"), (0, "kernel=6.8.0-2\nreboot_required=no\n")])
+    app.runner.responses["status"] = lambda addr: next(attempts)
+    res = await app.reboot(101, interval=0)
+    assert app.pve.events == [("reboot", 101)]
+    assert res["back_online"] is True and res["kernel"] == "6.8.0-2"
+
+
+async def test_reboot_gives_up(app):
+    app.runner.responses["status"] = (255, "Connection refused")
+    res = await app.reboot(101, wait_s=0.03, interval=0.01)
+    assert res["back_online"] is False
+
+
+async def test_rollback_only_own_snapshots_and_starts_guest(app):
+    with pytest.raises(PolicyError):
+        await app.rollback(101, "manual-before-upgrade")
+    res = await app.rollback(101, SNAPSHOT_PREFIX + "20260101_000000")
+    assert res["started_after_rollback"] is True
+    assert [e[0] for e in app.pve.events] == ["rollback", "start"]
+
+
+async def test_delete_old_snapshots_only_touches_old_own_snapshots_on_tagged_guests(app):
+    old, new = 1_000_000_000, 4_000_000_000  # 2001 and 2096
+    app.pve.snaps[101] = [
+        {"name": SNAPSHOT_PREFIX + "old", "snaptime": old},
+        {"name": SNAPSHOT_PREFIX + "new", "snaptime": new},
+        {"name": "manual", "snaptime": old},
+    ]
+    app.pve.snaps[103] = [{"name": SNAPSHOT_PREFIX + "old", "snaptime": old}]  # untagged guest
+    deleted = await app.delete_old_snapshots(older_than_days=7)
+    assert deleted == [{"vmid": 101, "snapshot": SNAPSHOT_PREFIX + "old"}]
+    assert [s["name"] for s in app.pve.snaps[101]] == [SNAPSHOT_PREFIX + "new", "manual"]
+    assert len(app.pve.snaps[103]) == 1
+
+
+async def test_list_snapshots_marks_own(app):
+    app.pve.snaps[101] = [{"name": SNAPSHOT_PREFIX + "x", "snaptime": 1_000_000_000}, {"name": "manual"}]
+    snaps = await app.list_snapshots(101)
+    assert [(s["name"], s["pvewarden"]) for s in snaps] == [(SNAPSHOT_PREFIX + "x", True), ("manual", False)]
+    assert snaps[1]["created"] is None
+
+
+# --- static inventory (no Proxmox) ----------------------------------------------------------
+
+
+@pytest.fixture
+def static_app(tmp_path):
+    a = App(
+        parse(
+            {
+                "state_dir": str(tmp_path),
+                "ssh": {"key": "/k"},
+                "static_guests": [{"vmid": 1, "name": "t", "address": "192.0.2.50", "tags": [UPD, RBT]}],
+            }
+        )
+    )
+    a.runner = FakeRunner()
+    return a
+
+
+async def test_static_mode_updates_without_snapshot(static_app):
+    res = await static_app.apply_updates(1, snapshot=False)
+    assert res["ok"] and static_app.runner.calls[0][0] == "192.0.2.50"
+    assert static_app.describe(await static_app.guest(1))["source"] == "static-config"
+
+
+async def test_static_mode_has_no_proxmox_operations(static_app):
+    for op in (static_app.apply_updates(1), static_app.reboot(1), static_app.list_snapshots(1)):
+        with pytest.raises(ProxmoxError, match="not configured"):
+            await op
