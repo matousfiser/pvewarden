@@ -1,0 +1,30 @@
+[Unit]
+Description=pvewarden MCP server (agent-safe patching of Proxmox guests)
+# usually listens on a VPN address: start after the network (and WireGuard, if used) is up
+Wants=network-online.target
+After=network-online.target wg-quick@wg0.service
+
+[Service]
+Type=simple
+User=pvewarden
+Group=pvewarden
+Environment=PVEWARDEN_CONFIG=/etc/pvewarden/config.toml
+ExecStart=/opt/pvewarden/venv/bin/pvewarden serve --http
+Restart=on-failure
+RestartSec=10
+
+# hardening: the service can only write its state directory
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/pvewarden
+
+[Install]
+WantedBy=multi-user.target

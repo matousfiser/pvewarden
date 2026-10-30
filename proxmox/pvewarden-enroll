@@ -1,0 +1,134 @@
+#!/bin/bash
+# pvewarden-enroll — install/refresh the pvewarden client on guests. Run as root on the Proxmox host.
+#   pvewarden-enroll [--pool] [--tags tag1,tag2] VMID...   install, optionally add to pool / merge tags
+#   pvewarden-enroll --all                                 re-install on every guest in the pool
+#   pvewarden-enroll --uninstall VMID...                   remove the client from guests
+set -euo pipefail
+
+CONF=${PVEWARDEN_ENROLL_CONF:-/etc/pvewarden/enroll.conf}
+GUEST_DIR="$(cd "$(dirname "$(readlink -f "$0")")/../guest" && pwd)"
+PVE_ETC=${PVE_ETC:-/etc/pve}
+POOL=pvewarden
+# shellcheck source=/dev/null
+. "$CONF" # PUBKEY=, FROM=, optional POOL=
+: "${PUBKEY:?PUBKEY missing in $CONF}" "${FROM:?FROM missing in $CONF}"
+
+usage() {
+  sed -n '3,5s/^#  //p' "$0"
+  exit 2
+}
+
+# Runs inside the guest as root: unpack the bundle from stdin and run install.sh with the given args.
+# shellcheck disable=SC2016  # expanded inside the guest, not here
+REMOTE='set -e
+d=$(mktemp -d); trap "rm -rf $d" EXIT
+base64 -d | tar -xz -C "$d"
+"$d/guest/install.sh" "$@"'
+
+# guest scripts as base64 tar, so they survive qm guest exec's text-only stdin
+bundle() { tar -C "$GUEST_DIR/.." -cz guest | base64 -w0; }
+
+guest_type() {
+  if [ -f "$PVE_ETC/lxc/$1.conf" ]; then
+    echo lxc
+  elif [ -f "$PVE_ETC/qemu-server/$1.conf" ]; then
+    echo qemu
+  else
+    echo "VMID $1 not found on this node" >&2
+    return 1
+  fi
+}
+
+pool_members() {
+  pvesh get "/pools/$POOL" --output-format json |
+    perl -MJSON::PP -e 'print "$_->{vmid}\n" for grep { defined $_->{vmid} } @{decode_json(join "", <STDIN>)->{members}}'
+}
+
+# run_lxc/run_qemu VMID ARGS... : run install.sh ARGS inside the guest
+run_lxc() {
+  local id=$1
+  shift
+  pct status "$id" | grep -q running || {
+    echo "container $id is not running" >&2
+    return 1
+  }
+  bundle | pct exec "$id" -- bash -c "$REMOTE" _ "$@"
+}
+
+run_qemu() {
+  local id=$1
+  shift
+  qm status "$id" | grep -q running || {
+    echo "VM $id is not running" >&2
+    return 1
+  }
+  qm agent "$id" ping 2>/dev/null || {
+    echo "VM $id: qemu-guest-agent not responding (install it, or run guest/install.sh by hand)" >&2
+    return 1
+  }
+  # qm guest exec prints JSON; relay output and exit code
+  bundle | qm guest exec "$id" --pass-stdin 1 --timeout 600 -- bash -c "$REMOTE" _ "$@" |
+    perl -MJSON::PP -e '
+      my $r = decode_json(join "", <STDIN>);
+      print $r->{"out-data"} // ""; print STDERR $r->{"err-data"} // "";
+      exit 124 unless $r->{exited};
+      exit($r->{exitcode} // 1);'
+}
+
+add_to_pool() {
+  local id=$1
+  if pool_members | grep -qx "$id"; then
+    echo "already in pool $POOL"
+  else
+    pveum pool modify "$POOL" --vms "$id" && echo "added to pool $POOL"
+  fi
+}
+
+merge_tags() {
+  local id=$1 type=$2 cmd current merged
+  cmd=$([ "$type" = lxc ] && echo pct || echo qm)
+  current=$($cmd config "$id" | sed -n 's/^tags: //p')
+  # shellcheck disable=SC2086  # word splitting of tag lists is intended
+  merged=$(printf '%s\n' ${current//;/ } ${TAGS//,/ } | sort -u | paste -sd';')
+  $cmd set "$id" --tags "$merged" && echo "tags: $merged"
+}
+
+DO_POOL=0 TAGS="" UNINSTALL=0 IDS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pool) DO_POOL=1 ;;
+    --tags)
+      TAGS=${2:?--tags needs a value}
+      shift
+      ;;
+    --all) mapfile -t IDS < <(pool_members) ;;
+    --uninstall) UNINSTALL=1 ;;
+    -h | --help) usage ;;
+    [0-9]*) IDS+=("$1") ;;
+    *) usage ;;
+  esac
+  shift
+done
+[ ${#IDS[@]} -gt 0 ] || usage
+
+if [ "$UNINSTALL" = 1 ]; then ARGS=(--uninstall); else ARGS=("$PUBKEY" "$FROM"); fi
+
+failed=()
+for id in "${IDS[@]}"; do
+  echo "=== $id"
+  if type=$(guest_type "$id") && "run_$type" "$id" "${ARGS[@]}"; then
+    if [ "$UNINSTALL" = 0 ]; then
+      [ "$DO_POOL" = 1 ] && add_to_pool "$id"
+      [ -n "$TAGS" ] && merge_tags "$id" "$type"
+    fi
+  else
+    failed+=("$id")
+  fi
+done
+
+echo
+if [ ${#failed[@]} -gt 0 ]; then
+  echo "FAILED: ${failed[*]}"
+  exit 1
+fi
+echo "OK: ${IDS[*]}"

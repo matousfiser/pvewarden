@@ -1,0 +1,17 @@
+#!/bin/bash
+# /usr/local/sbin/pvewarden-gate — forced command for the pvewarden SSH key.
+# Whatever the client asks for, only these exact words are accepted.
+case "${SSH_ORIGINAL_COMMAND:-}" in
+  check|status|upgrade-security|upgrade-all)
+    exec sudo -n /usr/local/sbin/pvewarden-guest "$SSH_ORIGINAL_COMMAND"
+    ;;
+  services)
+    # read-only, runs as the pvewarden user (no root needed)
+    echo "system=$(systemctl is-system-running 2>/dev/null)"
+    systemctl list-units --state=failed --no-legend --plain 2>/dev/null | awk '{print "failed=" $1}'
+    ;;
+  *)
+    echo "pvewarden: command not allowed" >&2
+    exit 1
+    ;;
+esac

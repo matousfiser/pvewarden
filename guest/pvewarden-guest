@@ -1,0 +1,72 @@
+#!/bin/bash
+# /usr/local/sbin/pvewarden-guest — privileged worker. The pvewarden user may run exactly
+# the four commands below as root (see /etc/sudoers.d/pvewarden); nothing else.
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=300)
+
+ORIGINS_SECURITY=(
+  '${distro_id}:${distro_codename}-security'
+  '${distro_id}ESMApps:${distro_codename}-apps-security'
+  '${distro_id}ESM:${distro_codename}-infra-security'
+)
+ORIGINS_ALL=(
+  "${ORIGINS_SECURITY[@]}"
+  '${distro_id}:${distro_codename}'
+  '${distro_id}:${distro_codename}-updates'
+)
+
+# Run unattended-upgrade allowed to install only from the given official origins.
+# Origins configured on the guest itself (e.g. third-party repos) are cleared for this run.
+upgrade_from() {
+  local dir rc=0
+  dir=$(mktemp -d)
+  printf 'Dir::Etc::main "%s/main.conf";\n' "$dir" > "$dir/apt.conf"
+  {
+    echo '#clear Unattended-Upgrade::Allowed-Origins;'
+    echo '#clear Unattended-Upgrade::Origins-Pattern;'
+    echo 'Unattended-Upgrade::Allowed-Origins {'
+    printf '  "%s";\n' "$@"
+    echo '};'
+  } > "$dir/main.conf"
+  APT_CONFIG="$dir/apt.conf" unattended-upgrade -v || rc=$?
+  rm -rf "$dir"
+  return $rc
+}
+
+case "${1:-}" in
+  check)
+    # one line per upgradable package: name, installed, candidate, origin:archive list, held
+    apt-get update -qq "${APT_OPTS[@]}" >/dev/null
+    python3 - <<'PY'
+import apt, apt_pkg
+for p in apt.Cache():
+    if not p.is_upgradable:
+        continue
+    origins = ",".join(sorted({f"{o.origin}:{o.archive}" for o in p.candidate.origins}))
+    held = "held" if p._pkg.selected_state == apt_pkg.SELSTATE_HOLD else "-"
+    print("\t".join([p.name, p.installed.version, p.candidate.version, origins, held]))
+PY
+    ;;
+  status)
+    . /etc/os-release
+    echo "os=$PRETTY_NAME"
+    echo "kernel=$(uname -r)"
+    echo "uptime_s=$(cut -d' ' -f1 /proc/uptime)"
+    if [ -f /var/run/reboot-required ]; then echo "reboot_required=yes"; else echo "reboot_required=no"; fi
+    [ -f /var/run/reboot-required.pkgs ] && sed 's/^/reboot_pkg=/' /var/run/reboot-required.pkgs
+    true
+    ;;
+  upgrade-security)
+    apt-get update -qq "${APT_OPTS[@]}"
+    upgrade_from "${ORIGINS_SECURITY[@]}"
+    ;;
+  upgrade-all)
+    apt-get update -qq "${APT_OPTS[@]}"
+    upgrade_from "${ORIGINS_ALL[@]}"
+    ;;
+  *)
+    echo "usage: pvewarden-guest check|status|upgrade-security|upgrade-all" >&2
+    exit 2
+    ;;
+esac
