@@ -76,7 +76,8 @@ class ProxmoxClient:
     async def permissions(self, path: str | None = None) -> dict[str, set[str]]:
         """Effective privileges of this token: for one path (inherited ones included) or per ACL path."""
         data = await self.request("GET", "/access/permissions", **({"path": path} if path else {}))
-        return {path: {priv for priv, on in privs.items() if on} for path, privs in data.items()}
+        # a listed privilege is granted; its value is only the ACL's propagate flag (0 when inherited from a pool)
+        return {path: set(privs) for path, privs in data.items()}
 
     async def guests(self) -> list[Guest]:
         out = []
