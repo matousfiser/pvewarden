@@ -1,0 +1,661 @@
+#!/bin/bash
+# pvewarden-setup — install, upgrade or remove pvewarden. Run as root on a Proxmox VE host.
+#   pvewarden-setup [install|upgrade|enroll|uninstall] [--yes] [--dry-run] [--source DIR|TARBALL]
+#     no command      interactive menu
+#     --yes           take defaults / PVEWARDEN_* environment variables instead of asking
+#     --dry-run       show what would be done, change nothing
+#     --source        use a local copy of pvewarden instead of downloading the release
+#
+# What install does on this host: a pool, a role with only the privileges pvewarden needs, an
+# API user with a token granted only on that pool, an LXC running the server, and the
+# pvewarden-enroll tool. The token secret goes straight into the container's config; it is
+# never shown. Nothing here runs in the background afterwards.
+# perl snippets for JSON parsing are deliberately single-quoted
+# shellcheck disable=SC2016
+set -euo pipefail
+
+VERSION=0.1.0.dev0
+REPO="${PVEWARDEN_REPO:-OWNER/pvewarden}"
+POOL=pvewarden
+ROLE=PVEWarden
+PVE_USER=pvewarden@pve
+TOKEN_NAME=server
+HOST_DIR=${PVEWARDEN_HOST_DIR:-/opt/pvewarden}       # enroll tool and guest scripts on this host
+ETC=${PVEWARDEN_HOST_ETC:-/etc/pvewarden}            # enroll.conf and setup state on this host
+SBIN=${PVEWARDEN_SBIN:-/usr/local/sbin}
+CT_ETC=/etc/pvewarden                                # server config inside the container
+PVE_ETC=${PVE_ETC:-/etc/pve}
+SETUP_STATE=$ETC/setup.conf
+TITLE="pvewarden $VERSION setup"
+CT_TAG=pvewarden-server
+TAG_UPDATE=pvewarden-update
+TAG_REBOOT=pvewarden-reboot
+
+DRY_RUN=0 YES=0 SOURCE="" COMMAND=""
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+# ============================================================================================
+# output and dialogs
+# ============================================================================================
+
+die() {
+  echo "pvewarden-setup: $*" >&2
+  exit 1
+}
+info() { echo ">>> $*"; }
+# run CMD...: execute, or only print in --dry-run mode
+run() {
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "would run: $*"
+  else
+    "$@"
+  fi
+}
+
+# Every question can be answered by an environment variable PVEWARDEN_<NAME>; with --yes the
+# variable or the default is taken without asking.
+env_or() {
+  local name="PVEWARDEN_$1"
+  printf '%s' "${!name:-$2}"
+}
+
+# ask NAME "question" default  ->  sets $NAME
+ask() {
+  local name=$1 question=$2 value
+  value=$(env_or "$1" "$3")
+  if [ "$YES" = 0 ]; then
+    value=$(whiptail --title "$TITLE" --inputbox "$question" 12 76 "$value" 3>&1 1>&2 2>&3) || die "cancelled"
+  fi
+  printf -v "$name" '%s' "$value"
+}
+
+# ask_secret NAME "question"  ->  sets $NAME (asked twice, may be empty)
+ask_secret() {
+  local name=$1 question=$2 a b
+  a=$(env_or "$1" "")
+  if [ "$YES" = 0 ]; then
+    while :; do
+      a=$(whiptail --title "$TITLE" --passwordbox "$question" 10 76 3>&1 1>&2 2>&3) || die "cancelled"
+      [ -z "$a" ] && break
+      b=$(whiptail --title "$TITLE" --passwordbox "Repeat:" 8 76 3>&1 1>&2 2>&3) || die "cancelled"
+      [ "$a" = "$b" ] && break
+      whiptail --title "$TITLE" --msgbox "The two entries differ, try again." 8 60
+    done
+  fi
+  printf -v "$name" '%s' "$a"
+}
+
+# choose NAME "question" default tag description [tag description ...]  ->  sets $NAME
+choose() {
+  local name=$1 question=$2 value
+  value=$(env_or "$1" "$3")
+  shift 3
+  if [ "$YES" = 0 ]; then
+    value=$(whiptail --title "$TITLE" --default-item "$value" --menu "$question" 20 76 10 "$@" 3>&1 1>&2 2>&3) ||
+      die "cancelled"
+  fi
+  printf -v "$name" '%s' "$value"
+}
+
+# confirm "question"  ->  0 = yes
+confirm() {
+  [ "$YES" = 1 ] && return 0
+  whiptail --title "$TITLE" --scrolltext --yesno "$1" 30 90
+}
+
+message() {
+  if [ "$YES" = 1 ]; then echo "$1"; else whiptail --title "$TITLE" --msgbox "$1" 20 76; fi
+}
+
+json() { perl -MJSON::PP -e "my \$d = decode_json(join '', <STDIN>); $1"; }
+
+# ============================================================================================
+# host checks and discovery
+# ============================================================================================
+
+preflight() {
+  [ "$(id -u)" = 0 ] || die "run as root"
+  command -v pveversion >/dev/null || die "this is not a Proxmox VE host"
+  PVE_MAJOR=$(pveversion | sed -n 's#^pve-manager/\([0-9]*\)\..*#\1#p')
+  [ -n "$PVE_MAJOR" ] && [ "$PVE_MAJOR" -ge 8 ] || die "Proxmox VE 8 or newer is required"
+  [ "$YES" = 1 ] || command -v whiptail >/dev/null || die "whiptail is missing (apt install whiptail)"
+  # reading guest IPs through the qemu guest agent: renamed in PVE 9
+  if [ "$PVE_MAJOR" -ge 9 ]; then AGENT_PRIV=VM.GuestAgent.Audit; else AGENT_PRIV=VM.Monitor; fi
+  PRIVS="VM.Audit VM.Snapshot VM.Snapshot.Rollback VM.PowerMgmt $AGENT_PRIV"
+  DEBIAN=$((PVE_MAJOR + 4)) # PVE 8 = Debian 12, PVE 9 = Debian 13
+  NODE=$(hostname)
+}
+
+load_state() {
+  CTID="" LISTEN="" CT_IP=""
+  # shellcheck source=/dev/null
+  [ -f "$SETUP_STATE" ] && . "$SETUP_STATE"
+  return 0
+}
+
+save_state() {
+  run mkdir -p "$ETC"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "would write $SETUP_STATE: CTID=$CTID LISTEN=$LISTEN CT_IP=$CT_IP"
+  else
+    printf 'CTID=%q\nLISTEN=%q\nCT_IP=%q\nVERSION=%q\n' "$CTID" "$LISTEN" "$CT_IP" "$VERSION" > "$SETUP_STATE"
+  fi
+}
+
+storages_for() { pvesm status --content "$1" 2>/dev/null | awk 'NR > 1 && $3 == "active" {print $1, $2}'; }
+bridges() {
+  local d
+  for d in /sys/class/net/*/bridge; do [ -d "$d" ] && basename "$(dirname "$d")"; done
+  return 0
+}
+host_ip_on() { ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1; }
+default_gw() { ip -4 route show default 2>/dev/null | awk '{print $3; exit}'; }
+
+# ============================================================================================
+# source code: local copy or release download
+# ============================================================================================
+
+fetch_source() {
+  SRC_TAR=$WORK/pvewarden.tar.gz
+  if [ -n "$SOURCE" ] && [ -d "$SOURCE" ]; then
+    tar -C "$SOURCE" -czf "$SRC_TAR" --exclude .git --exclude .venv --exclude '__pycache__' --exclude config.toml .
+  elif [ -n "$SOURCE" ]; then
+    cp "$SOURCE" "$SRC_TAR"
+  else
+    local url="https://github.com/$REPO/releases/download/v$VERSION/pvewarden-$VERSION.tar.gz"
+    info "downloading $url"
+    curl -fsSL "$url" -o "$SRC_TAR" || die "download failed: $url"
+    curl -fsSL "$url.sha256" -o "$SRC_TAR.sha256" || die "checksum download failed"
+    (cd "$WORK" && sed "s#  .*#  pvewarden.tar.gz#" pvewarden.tar.gz.sha256 | sha256sum -c --quiet) ||
+      die "checksum mismatch: refusing to install"
+  fi
+  mkdir -p "$WORK/src"
+  tar -C "$WORK/src" -xzf "$SRC_TAR"
+  [ -f "$WORK/src/proxmox/pvewarden-enroll" ] || die "the source does not look like pvewarden"
+}
+
+# ============================================================================================
+# install: questions
+# ============================================================================================
+
+ask_container() {
+  local mode storages bridge_items=() b
+  CTID=$(env_or CTID "$(pvesh get /cluster/nextid)")
+  CT_HOSTNAME=pvewarden CORES=1 MEMORY=512 SWAP=512 DISK=4 VLAN="" IP6="" NAMESERVER="" SEARCHDOMAIN="" ONBOOT=1
+  BRIDGE=$(bridges | head -1)
+  ROOTFS_STORAGE=$(storages_for rootdir | awk '{print $1; exit}')
+  TEMPLATE_STORAGE=$(storages_for vztmpl | awk '{print $1; exit}')
+  [ -n "$ROOTFS_STORAGE" ] || die "no active storage can hold containers"
+  [ -n "$TEMPLATE_STORAGE" ] || die "no active storage can hold container templates"
+
+  choose MODE "The pvewarden server runs in its own small LXC container.\n\nDefault: Debian $DEBIAN, 1 core, 512 MB RAM, 4 GB disk, next free ID, first bridge.\nYou still choose the IP address, root password and SSH key.\n\nAdvanced: set every parameter." default \
+    default "Default settings" advanced "Advanced settings"
+  # shellcheck disable=SC2153  # set by choose
+  mode=$MODE
+
+  if [ "$mode" = advanced ]; then
+    ask CTID "Container ID:" "$CTID"
+    ask CT_HOSTNAME "Hostname:" "$CT_HOSTNAME"
+    storages=()
+    while read -r name type; do storages+=("$name" "$type"); done < <(storages_for rootdir)
+    choose ROOTFS_STORAGE "Storage for the container disk (snapshots of the server itself need ZFS, LVM-thin or Ceph):" "$ROOTFS_STORAGE" "${storages[@]}"
+    ask DISK "Disk size in GB:" "$DISK"
+    ask CORES "CPU cores:" "$CORES"
+    ask MEMORY "Memory in MB:" "$MEMORY"
+    ask SWAP "Swap in MB:" "$SWAP"
+    for b in $(bridges); do bridge_items+=("$b" "$(host_ip_on "$b")"); done
+    choose BRIDGE "Network bridge:" "$BRIDGE" "${bridge_items[@]}"
+    ask VLAN "VLAN tag (empty = none):" ""
+  fi
+  ask IP "IPv4 address with prefix for the container, e.g. 192.168.1.50/24, or 'dhcp'.\n\nA static address is recommended: agents connect to it and the HTTPS certificate is issued for it." "dhcp"
+  GW=""
+  if [ "$IP" != dhcp ]; then
+    ask GW "IPv4 gateway:" "$(default_gw)"
+  fi
+  if [ "$mode" = advanced ]; then
+    ask IP6 "IPv6: empty = none, 'auto' (SLAAC), 'dhcp', or address/prefix:" ""
+    ask NAMESERVER "DNS servers, space separated (empty = same as this host):" ""
+    ask SEARCHDOMAIN "DNS search domain (empty = same as this host):" ""
+    choose ONBOOT "Start the container when the host boots?" 1 1 "Yes" 0 "No"
+  fi
+
+  ask_secret ROOT_PASSWORD "Root password for the container (min. 5 characters).\nEmpty = no password: use SSH keys or 'pct enter $CTID'."
+  if [ -n "$ROOT_PASSWORD" ] && [ ${#ROOT_PASSWORD} -lt 5 ]; then die "the password must have at least 5 characters"; fi
+  local default_keys=""
+  [ -s /root/.ssh/authorized_keys ] && default_keys=/root/.ssh/authorized_keys
+  ask SSH_KEYS "SSH public keys for root in the container: a file with keys, or paste one key.\nEmpty = none." "$default_keys"
+  SSH_KEYS_FILE=""
+  if [ -n "$SSH_KEYS" ]; then
+    if [ -f "$SSH_KEYS" ]; then
+      SSH_KEYS_FILE=$SSH_KEYS
+    else
+      case "$SSH_KEYS" in
+        ssh-* | ecdsa-*) printf '%s\n' "$SSH_KEYS" > "$WORK/authorized_keys" && SSH_KEYS_FILE=$WORK/authorized_keys ;;
+        *) die "not a file and not an SSH public key: $SSH_KEYS" ;;
+      esac
+    fi
+  fi
+
+  pvesh get "/nodes/$NODE/lxc/$CTID/status/current" >/dev/null 2>&1 && die "ID $CTID is already in use"
+  return 0
+}
+
+ask_access() {
+  choose ACCESS "How will agents reach the pvewarden server?" https \
+    https "HTTPS on the container's address (self-signed certificate)" \
+    custom "My own address, e.g. a WireGuard/VPN IP I configure in the container myself"
+  if [ "$ACCESS" = custom ]; then
+    ask LISTEN "Address the server listens on (it must exist in the container before the server starts):" ""
+    [ -n "$LISTEN" ] || die "an address is required"
+    choose USE_TLS "Use HTTPS on that address too? (not needed inside an encrypted VPN)" no no "No, plain HTTP" yes "Yes, self-signed certificate"
+  else
+    LISTEN="" USE_TLS=yes
+  fi
+  ask AGENT_NAME "Name of the first agent (shown in the audit log):" agent
+}
+
+summary() {
+  cat <<EOF
+Container
+  ID / hostname        $CTID / $CT_HOSTNAME
+  template             Debian $DEBIAN ($TEMPLATE_STORAGE)
+  disk / cores / RAM   ${DISK} GB on $ROOTFS_STORAGE / $CORES / $MEMORY MB (+$SWAP MB swap)
+  network              $BRIDGE${VLAN:+ vlan $VLAN}, IPv4 $IP${GW:+ via $GW}${IP6:+, IPv6 $IP6}
+  DNS                  ${NAMESERVER:-as host}${SEARCHDOMAIN:+, search $SEARCHDOMAIN}
+  root password        $([ -n "$ROOT_PASSWORD" ] && echo set || echo none)
+  SSH keys             ${SSH_KEYS:-none}
+  start on boot        $([ "$ONBOOT" = 1 ] && echo yes || echo no)
+Server
+  agents connect via   $([ "$USE_TLS" = yes ] && echo https || echo http)://${LISTEN:-<container IP>}:8765/mcp
+Proxmox
+  pool $POOL, role $ROLE ($PRIVS)
+  user $PVE_USER, token $TOKEN_NAME granted only on /pool/$POOL
+EOF
+}
+
+# ============================================================================================
+# install: actions
+# ============================================================================================
+
+ensure_template() {
+  [ "$DRY_RUN" = 1 ] || pveam update >/dev/null || true
+  TEMPLATE=$(pveam available --section system | awk '{print $2}' | grep "^debian-$DEBIAN-standard" | sort -V | tail -1)
+  [ -n "$TEMPLATE" ] || die "no Debian $DEBIAN template found in 'pveam available'"
+  if ! pveam list "$TEMPLATE_STORAGE" | grep -q "$TEMPLATE"; then
+    info "downloading template $TEMPLATE"
+    run pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
+  fi
+}
+
+create_container() {
+  local net="name=eth0,bridge=$BRIDGE,ip=$IP"
+  [ -n "$GW" ] && net+=",gw=$GW"
+  [ -n "$VLAN" ] && net+=",tag=$VLAN"
+  [ -n "$IP6" ] && net+=",ip6=$IP6"
+  local args=(
+    --hostname "$CT_HOSTNAME" --cores "$CORES" --memory "$MEMORY" --swap "$SWAP"
+    --rootfs "$ROOTFS_STORAGE:$DISK" --net0 "$net" --unprivileged 1 --features nesting=1
+    --onboot "$ONBOOT" --tags "$CT_TAG" --description "pvewarden server (managed by pvewarden-setup)"
+  )
+  [ -n "$NAMESERVER" ] && args+=(--nameserver "$NAMESERVER")
+  [ -n "$SEARCHDOMAIN" ] && args+=(--searchdomain "$SEARCHDOMAIN")
+  [ -n "$SSH_KEYS_FILE" ] && args+=(--ssh-public-keys "$SSH_KEYS_FILE")
+  info "creating container $CTID"
+  run pct create "$CTID" "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" "${args[@]}"
+  run pct start "$CTID"
+  if [ -n "$ROOT_PASSWORD" ]; then
+    # via stdin: the password never appears in a process list or log
+    if [ "$DRY_RUN" = 1 ]; then echo "would set the root password"; else
+      printf 'root:%s\n' "$ROOT_PASSWORD" | pct exec "$CTID" -- chpasswd
+    fi
+  fi
+}
+
+wait_for_network() {
+  [ "$DRY_RUN" = 1 ] && {
+    CT_IP=${IP%/*}
+    [ "$IP" = dhcp ] && CT_IP=192.0.2.1
+    return 0
+  }
+  for _ in $(seq 60); do
+    CT_IP=$(pct exec "$CTID" -- ip -4 -o addr show dev eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+    if [ -n "$CT_IP" ] && pct exec "$CTID" -- getent hosts deb.debian.org >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
+  die "container $CTID has no working network (address: ${CT_IP:-none}); check the IP, gateway and DNS"
+}
+
+ensure_proxmox_access() {
+  info "pool $POOL, role $ROLE, user $PVE_USER"
+  pvesh get "/pools/$POOL" >/dev/null 2>&1 || run pveum pool add "$POOL" --comment "guests pvewarden may manage"
+  if pveum role list --output-format json | json 'exit !grep { $_->{roleid} eq "'"$ROLE"'" } @$d'; then
+    run pveum role modify "$ROLE" --privs "${PRIVS// /,}"
+  else
+    run pveum role add "$ROLE" --privs "${PRIVS// /,}"
+  fi
+  pvesh get "/access/users/$PVE_USER" >/dev/null 2>&1 ||
+    run pveum user add "$PVE_USER" --comment "pvewarden (API only, no login)"
+  run pveum acl modify "/pool/$POOL" --users "$PVE_USER" --roles "$ROLE"
+}
+
+create_token() {
+  if pvesh get "/access/users/$PVE_USER/token/$TOKEN_NAME" >/dev/null 2>&1; then
+    run pveum user token remove "$PVE_USER" "$TOKEN_NAME"
+  fi
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "would run: pveum user token add $PVE_USER $TOKEN_NAME --privsep 0"
+    TOKEN_SECRET=dry-run
+    return 0
+  fi
+  TOKEN_SECRET=$(pveum user token add "$PVE_USER" "$TOKEN_NAME" --privsep 0 --output-format json | json 'print $d->{value}')
+  [ -n "$TOKEN_SECRET" ] || die "token creation failed"
+}
+
+# API host name that matches the certificate, and how the container should verify it
+api_endpoint() {
+  local custom="$PVE_ETC/nodes/$NODE/pveproxy-ssl.pem"
+  API_IP=$(host_ip_on "$BRIDGE")
+  [ -n "$API_IP" ] || API_IP=$(hostname -I | awk '{print $1}')
+  if [ -f "$custom" ]; then
+    # custom (e.g. ACME) certificate: trusted by the system CAs, issued for this name
+    API_HOST=$(openssl x509 -in "$custom" -noout -subject -nameopt multiline | sed -n 's/ *commonName *= //p')
+    VERIFY=true
+  else
+    API_HOST=$NODE
+    VERIFY="\"$CT_ETC/pve-root-ca.pem\""
+  fi
+}
+
+ct_push() { # ct_push LOCALFILE REMOTEPATH MODE
+  run pct push "$CTID" "$1" "$2" --perms "$3"
+}
+
+install_server() {
+  info "installing the server in container $CTID"
+  run pct exec "$CTID" -- mkdir -p /root/pvewarden-src
+  ct_push "$SRC_TAR" /root/pvewarden-src.tar.gz 0600
+  run pct exec "$CTID" -- tar -C /root/pvewarden-src -xzf /root/pvewarden-src.tar.gz
+  run pct exec "$CTID" -- bash /root/pvewarden-src/deploy/install-server.sh "${LISTEN:-$CT_IP}"
+  [ -n "$LISTEN" ] || LISTEN=$CT_IP
+}
+
+write_server_config() {
+  local subnet agent_token
+  # the container's own network: guests are expected there (python3 exists in the container now)
+  if [ "$DRY_RUN" = 1 ]; then subnet="${CT_IP%.*}.0/24"; else
+    subnet=$(pct exec "$CTID" -- sh -c "python3 -c 'import ipaddress,sys; print(ipaddress.ip_interface(sys.argv[1]).network)' \$(ip -4 -o addr show dev eth0 | awk '{print \$4; exit}')")
+  fi
+  agent_token=$(openssl rand -base64 33 | tr '+/' '-_' | tr -d '=\n')
+  AGENT_TOKEN=$agent_token
+  local tls_lines=""
+  if [ "$USE_TLS" = yes ]; then
+    tls_lines="tls_cert = \"$CT_ETC/tls.crt\"
+tls_key = \"$CT_ETC/tls.key\""
+  fi
+  umask 077
+  cat > "$WORK/config.toml" <<EOF
+# written by pvewarden-setup $VERSION
+state_dir = "/var/lib/pvewarden"
+
+[proxmox]
+host = "$API_HOST"
+port = 8006
+token_id = "$PVE_USER!$TOKEN_NAME"
+token_secret = "$TOKEN_SECRET"
+verify_tls = $VERIFY
+
+[ssh]
+user = "pvewarden"
+key = "$CT_ETC/id_ed25519"
+subnets = ["$subnet"]
+
+[policy]
+tag_update = "$TAG_UPDATE"
+tag_reboot = "$TAG_REBOOT"
+
+[http]
+listen = "$LISTEN"
+port = 8765
+hostnames = ["$CT_HOSTNAME"]
+$tls_lines
+
+[http.clients]
+$AGENT_NAME = "$agent_token"
+EOF
+  info "writing the server configuration (token secret goes only into the container)"
+  ct_push "$WORK/config.toml" "$CT_ETC/config.toml" 0640
+  rm -f "$WORK/config.toml"
+  if [ "$VERIFY" != true ]; then ct_push "$PVE_ETC/pve-root-ca.pem" "$CT_ETC/pve-root-ca.pem" 0644; fi
+  run pct exec "$CTID" -- chown root:pvewarden "$CT_ETC/config.toml"
+  run pct exec "$CTID" -- sh -c "grep -q ' $API_HOST\$' /etc/hosts || echo '$API_IP $API_HOST' >> /etc/hosts"
+
+  if [ "$USE_TLS" = yes ]; then
+    local san="IP:$LISTEN,DNS:$CT_HOSTNAME"
+    run pct exec "$CTID" -- openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1095 \
+      -subj "/CN=$CT_HOSTNAME" -addext "subjectAltName=$san" -keyout "$CT_ETC/tls.key" -out "$CT_ETC/tls.crt"
+    run pct exec "$CTID" -- sh -c "chown root:pvewarden $CT_ETC/tls.key && chmod 0640 $CT_ETC/tls.key"
+  fi
+}
+
+start_server() {
+  run pct exec "$CTID" -- systemctl restart pvewarden
+  info "checking the setup (pvewarden doctor)"
+  run pct exec "$CTID" -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor || true
+}
+
+install_enroll_tool() {
+  info "installing pvewarden-enroll on this host"
+  run mkdir -p "$HOST_DIR" "$ETC"
+  run rm -rf "$HOST_DIR/guest" "$HOST_DIR/proxmox"
+  run cp -r "$WORK/src/guest" "$WORK/src/proxmox" "$HOST_DIR/"
+  run ln -sf "$HOST_DIR/proxmox/pvewarden-enroll" "$SBIN/pvewarden-enroll"
+  run ln -sf "$HOST_DIR/proxmox/pvewarden-setup" "$SBIN/pvewarden-setup"
+  local pubkey
+  if [ "$DRY_RUN" = 1 ]; then pubkey="ssh-ed25519 DRYRUN"; else
+    pubkey=$(pct exec "$CTID" -- cat "$CT_ETC/id_ed25519.pub")
+  fi
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "would write $ETC/enroll.conf: PUBKEY=$pubkey FROM=$CT_IP POOL=$POOL"
+  else
+    printf 'PUBKEY=%q\nFROM=%q\nPOOL=%q\n' "$pubkey" "$CT_IP" "$POOL" > "$ETC/enroll.conf"
+  fi
+}
+
+final_message() {
+  local scheme url fingerprint=""
+  scheme=$([ "$USE_TLS" = yes ] && echo https || echo http)
+  url="$scheme://$LISTEN:8765/mcp"
+  if [ "$USE_TLS" = yes ] && [ "$DRY_RUN" = 0 ]; then
+    fingerprint=$(pct exec "$CTID" -- openssl x509 -in "$CT_ETC/tls.crt" -noout -fingerprint -sha256 | cut -d= -f2)
+  fi
+  cat <<EOF
+
+================================================================================
+ pvewarden is installed.
+
+ MCP endpoint   $url
+ Agent token    $AGENT_TOKEN
+                (shown only now; it is stored in $CT_ETC/config.toml in container $CTID)
+$([ -n "$fingerprint" ] && printf ' TLS cert       self-signed, SHA-256 %s\n                copy it from the container: pct pull %s %s/tls.crt ./pvewarden.crt\n' "$fingerprint" "$CTID" "$CT_ETC")
+
+ Claude Code:
+   claude mcp add --transport http pvewarden $url \\
+     --header "Authorization: Bearer $AGENT_TOKEN"
+$([ "$USE_TLS" = yes ] && printf '   (trust the certificate first, e.g. NODE_EXTRA_CA_CERTS=./pvewarden.crt)\n')
+ Other MCP clients:
+   { "mcpServers": { "pvewarden": { "type": "http", "url": "$url",
+       "headers": { "Authorization": "Bearer $AGENT_TOKEN" } } } }
+
+ Next: let pvewarden manage guests:  pvewarden-setup enroll
+   or: pvewarden-enroll --pool --tags $TAG_UPDATE <VMID>
+ Check the setup any time:  pct exec $CTID -- runuser -u pvewarden -- pvewarden doctor
+================================================================================
+EOF
+}
+
+do_install() {
+  load_state
+  if [ -n "$CTID" ] && pct status "$CTID" >/dev/null 2>&1; then
+    die "pvewarden is already installed in container $CTID: use 'pvewarden-setup upgrade' or 'uninstall'"
+  fi
+  fetch_source
+  ask_container
+  ask_access
+  confirm "Please review:\n\n$(summary)\n\nProceed?" || die "cancelled"
+  [ "$YES" = 1 ] && summary
+  ensure_template
+  create_container
+  wait_for_network
+  ensure_proxmox_access
+  create_token
+  api_endpoint
+  install_server
+  write_server_config
+  save_state
+  start_server
+  install_enroll_tool
+  final_message
+  if [ "$YES" = 0 ] && confirm "Enroll guests now?"; then do_enroll; fi
+}
+
+# ============================================================================================
+# enroll: choose guests and permissions
+# ============================================================================================
+
+do_enroll() {
+  load_state
+  [ -x "$SBIN/pvewarden-enroll" ] || [ "$DRY_RUN" = 1 ] || die "pvewarden is not installed (run install first)"
+  local items=() vmid name type status chosen level tags
+  while IFS=$'\t' read -r vmid name type status; do
+    [ "$vmid" = "$CTID" ] && continue # never the server itself
+    items+=("$vmid" "$name ($type, $status)" OFF)
+  done < <(pvesh get /cluster/resources --type vm --output-format json |
+    json 'printf "%s\t%s\t%s\t%s\n", $_->{vmid}, $_->{name} // "", $_->{type}, $_->{status} for sort { $a->{vmid} <=> $b->{vmid} } grep { !$_->{template} } @$d')
+
+  if [ "$YES" = 1 ]; then
+    chosen=$(env_or ENROLL "")
+  else
+    chosen=$(whiptail --title "$TITLE" --separate-output --checklist \
+      "Guests to manage (running Ubuntu/Debian; VMs need the qemu-guest-agent):" 22 76 14 "${items[@]}" 3>&1 1>&2 2>&3) ||
+      die "cancelled"
+  fi
+  [ -n "$chosen" ] || {
+    echo "no guests selected"
+    return 0
+  }
+  choose LEVEL "What may agents do on the selected guests?" update \
+    readonly "Read only: check updates and services" \
+    update "Install updates (with snapshots before)" \
+    reboot "Install updates and reboot"
+  # shellcheck disable=SC2153  # set by choose
+  level=$LEVEL
+  case "$level" in
+    readonly) tags="" ;;
+    update) tags=$TAG_UPDATE ;;
+    reboot) tags="$TAG_UPDATE,$TAG_REBOOT" ;;
+    *) die "unknown level $level" ;;
+  esac
+  local args=(--pool)
+  [ -n "$tags" ] && args+=(--tags "$tags")
+  [ "$DRY_RUN" = 1 ] && args+=(--dry-run)
+  # shellcheck disable=SC2086  # one VMID per word
+  "$SBIN/pvewarden-enroll" "${args[@]}" $chosen
+}
+
+# ============================================================================================
+# upgrade and uninstall
+# ============================================================================================
+
+do_upgrade() {
+  load_state
+  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+  fetch_source
+  confirm "Upgrade pvewarden in container $CTID and the tools on this host to $VERSION?" || die "cancelled"
+  info "upgrading the server in container $CTID"
+  run pct exec "$CTID" -- rm -rf /root/pvewarden-src
+  run pct exec "$CTID" -- mkdir -p /root/pvewarden-src
+  ct_push "$SRC_TAR" /root/pvewarden-src.tar.gz 0600
+  run pct exec "$CTID" -- tar -C /root/pvewarden-src -xzf /root/pvewarden-src.tar.gz
+  run pct exec "$CTID" -- bash /root/pvewarden-src/deploy/install-server.sh "$LISTEN"
+  run pct exec "$CTID" -- systemctl restart pvewarden
+  CT_IP=${CT_IP:-$LISTEN}
+  install_enroll_tool_keep_conf
+  save_state
+  if confirm "Update the client on every enrolled guest too (pvewarden-enroll --all)?"; then
+    run "$SBIN/pvewarden-enroll" --all || true
+  fi
+  start_server
+}
+
+install_enroll_tool_keep_conf() {
+  run rm -rf "$HOST_DIR/guest" "$HOST_DIR/proxmox"
+  run mkdir -p "$HOST_DIR"
+  run cp -r "$WORK/src/guest" "$WORK/src/proxmox" "$HOST_DIR/"
+}
+
+do_uninstall() {
+  load_state
+  confirm "Remove pvewarden?\n\n- the client from every guest in pool $POOL\n- token, user $PVE_USER, role $ROLE and pool $POOL\n- the tools on this host\n\nGuest tags are left in place. The container is removed only if you confirm it next." ||
+    die "cancelled"
+  if [ -x "$SBIN/pvewarden-enroll" ] && pvesh get "/pools/$POOL" >/dev/null 2>&1; then
+    run "$SBIN/pvewarden-enroll" --uninstall --all || true
+  fi
+  pvesh get "/access/users/$PVE_USER" >/dev/null 2>&1 && run pveum user delete "$PVE_USER"
+  pveum role list --output-format json | json 'exit !grep { $_->{roleid} eq "'"$ROLE"'" } @$d' && run pveum role delete "$ROLE"
+  if pvesh get "/pools/$POOL" >/dev/null 2>&1; then
+    # a pool must be empty before it can be deleted; guests stay, only the membership goes
+    local members
+    members=$(pvesh get "/pools/$POOL" --output-format json | json 'print join ",", map { $_->{vmid} } grep { defined $_->{vmid} } @{$d->{members}}')
+    [ -n "$members" ] && run pveum pool modify "$POOL" --vms "$members" --delete 1
+    run pveum pool delete "$POOL"
+  fi
+  if [ -n "$CTID" ] && pct status "$CTID" >/dev/null 2>&1; then
+    if [ "$YES" = 0 ] && whiptail --title "$TITLE" --defaultno --yesno "Also destroy container $CTID (the server, its audit log and keys)?" 10 76; then
+      run pct stop "$CTID" || true
+      run pct destroy "$CTID" --purge 1
+    elif [ "$(env_or DESTROY_CT no)" = yes ]; then
+      run pct stop "$CTID" || true
+      run pct destroy "$CTID" --purge 1
+    else
+      echo "container $CTID was kept"
+    fi
+  fi
+  run rm -rf "$HOST_DIR" "$ETC" "$SBIN/pvewarden-enroll" "$SBIN/pvewarden-setup"
+  echo "pvewarden removed"
+}
+
+# ============================================================================================
+
+usage() {
+  sed -n '3,7s/^#  \{0,1\}//p' "$0"
+  exit 2
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    install | upgrade | enroll | uninstall) COMMAND=$1 ;;
+    --yes | -y) YES=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --source)
+      SOURCE=${2:?--source needs a path}
+      shift
+      ;;
+    -h | --help) usage ;;
+    *) usage ;;
+  esac
+  shift
+done
+
+preflight
+if [ -z "$COMMAND" ]; then
+  [ "$YES" = 0 ] || die "give a command with --yes"
+  load_state
+  if [ -n "$CTID" ]; then default=enroll; else default=install; fi
+  choose COMMAND "What do you want to do?" "$default" \
+    install "Install pvewarden" \
+    enroll "Let pvewarden manage more guests" \
+    upgrade "Upgrade an existing installation" \
+    uninstall "Remove pvewarden"
+fi
+"do_$COMMAND"

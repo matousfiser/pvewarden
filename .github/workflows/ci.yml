@@ -17,7 +17,7 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run shellcheck guest/install.sh guest/pvewarden-guest guest/pvewarden-gate proxmox/pvewarden-enroll deploy/install-server.sh
+      - run: uv run shellcheck guest/install.sh guest/pvewarden-guest guest/pvewarden-gate proxmox/pvewarden-enroll proxmox/pvewarden-setup deploy/install-server.sh
 
   test:
     runs-on: ubuntu-latest

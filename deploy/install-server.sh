@@ -14,7 +14,7 @@ SVC_USER=pvewarden
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv openssh-client
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv openssh-client openssl ca-certificates
 
 id "$SVC_USER" >/dev/null 2>&1 || useradd --system --home-dir "$STATE" --shell /usr/sbin/nologin "$SVC_USER"
 install -d -o root -g root -m 0755 "$APP"
@@ -26,6 +26,7 @@ install -d -o "$SVC_USER" -g "$SVC_USER" -m 0700 "$STATE"
 "$APP/venv/bin/pip" install -q --upgrade pip
 "$APP/venv/bin/pip" install -q -r "$SRC/requirements.lock"
 "$APP/venv/bin/pip" install -q --no-deps --force-reinstall "$SRC"
+ln -sf "$APP/venv/bin/pvewarden" /usr/local/bin/pvewarden
 
 # SSH key for guests: generated here and never leaves this machine
 if [ ! -f "$ETC/id_ed25519" ]; then
@@ -50,7 +51,7 @@ systemctl enable pvewarden >/dev/null
 
 echo
 echo "Installed $("$APP/venv/bin/pvewarden" --version)."
-echo "Next: edit $ETC/config.toml ([proxmox]), then: pvewarden check-config && systemctl restart pvewarden"
+echo "Next: edit $ETC/config.toml ([proxmox]), then check: runuser -u $SVC_USER -- pvewarden doctor"
 echo
 echo "Guest public key (for pvewarden-enroll / guest/install.sh):"
 cat "$ETC/id_ed25519.pub"
