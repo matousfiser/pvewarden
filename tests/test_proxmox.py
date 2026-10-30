@@ -135,10 +135,14 @@ async def test_cluster_operations_go_to_the_guests_node(pve):
 
 @respx.mock
 async def test_permissions_for_a_path(pve):
+    # real PVE 9.1 answer for a guest in the pool: the values are the propagate flag, not "granted"
     route = respx.get(f"{API}/access/permissions").respond(
-        json={"data": {"/vms/101": {"VM.Audit": 1, "VM.Snapshot": 1, "VM.Allocate": 0}}}
+        json={"data": {"/vms/101": {"VM.Audit": 0, "VM.Snapshot": 0}, "/pool/pvewarden": {"VM.Audit": 1}}}
     )
-    assert await pve.permissions("/vms/101") == {"/vms/101": {"VM.Audit", "VM.Snapshot"}}
+    assert await pve.permissions("/vms/101") == {
+        "/vms/101": {"VM.Audit", "VM.Snapshot"},
+        "/pool/pvewarden": {"VM.Audit"},
+    }
     assert route.calls.last.request.url.params["path"] == "/vms/101"
 
 
