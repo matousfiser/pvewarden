@@ -22,6 +22,10 @@ dependencies = [
     "uvicorn>=0.30",
 ]
 
+[project.urls]
+Homepage = "https://github.com/matousfiser/pvewarden"
+Issues = "https://github.com/matousfiser/pvewarden/issues"
+
 [project.scripts]
 pvewarden = "pvewarden.cli:main"
 
