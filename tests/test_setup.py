@@ -44,6 +44,7 @@ esac
 esac
 """,
     "pct": """case "$1" in
+  create) while [ $# -gt 0 ]; do [ "$1" = --ssh-public-keys ] && cp "$2" "$FAKE/ct_authorized_keys"; shift; done ;;
   status) [ -f "$FAKE/ct" ] && echo "status: running" || exit 2 ;;
   push) mkdir -p "$FAKE/pushed"; cp "$3" "$FAKE/pushed/$(echo "$4" | tr / _)" ;;
   exec)
@@ -58,6 +59,14 @@ esac
 esac
 """,
     "whiptail": 'echo "whiptail must not be called with --yes" >&2; exit 1\n',
+    "curl": """url=${@: -1}
+case "$url" in
+  https://github.com/alice.keys) cat "$FAKE/alice.keys" ;;
+  https://gitlab.com/empty.keys) ;;
+  https://example.com/garbage) echo "<html>not a key</html>" ;;
+  *) exit 22 ;;
+esac
+""",
     "ip": """case "$*" in
   *"route show default"*) echo "default via 192.0.2.254 dev vmbr0" ;;
   *"addr show dev"*) echo "3: vmbr0    inet 192.0.2.1/24 scope global vmbr0" ;;
@@ -65,11 +74,22 @@ esac
 """,
 }
 
-LOGGED = ("pct", "pvesh", "pveum", "pveam")
+LOGGED = ("pct", "pvesh", "pveum", "pveam", "curl")
+
+
+@pytest.fixture(scope="session")
+def keys(tmp_path_factory):
+    """Real public keys: the installer validates every key with ssh-keygen."""
+    d = tmp_path_factory.mktemp("keys")
+    out = {}
+    for name in ("admin", "alice1", "alice2", "pasted"):
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", d / name], check=True)
+        out[name] = (d / f"{name}.pub").read_text().strip()
+    return out
 
 
 @pytest.fixture
-def host(tmp_path):
+def host(tmp_path, keys):
     """A fake Proxmox host. host.run(*args, **env) runs pvewarden-setup and returns the result."""
     fake = tmp_path / "fake"
     bin_dir = tmp_path / "bin"
@@ -95,7 +115,8 @@ def host(tmp_path):
     (pve_etc / "nodes/pve1").mkdir(parents=True)
     (pve_etc / "pve-root-ca.pem").write_text("-----BEGIN CERTIFICATE-----\nfake\n")
     keyfile = tmp_path / "admin.pub"
-    keyfile.write_text("ssh-ed25519 AAAAADMIN admin@laptop\n")
+    keyfile.write_text(keys["admin"] + "\n")
+    (fake / "alice.keys").write_text(keys["alice1"] + "\n" + keys["alice2"] + "\n")
 
     class Host:
         path = tmp_path
@@ -151,7 +172,7 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
         "ip=192.0.2.50/24,gw=192.0.2.254",
         "--unprivileged 1",
         "--tags pvewarden-server",
-        f"--ssh-public-keys {host.admin_keys}",
+        "--ssh-public-keys ",
     ):
         assert part in create, part
 
@@ -164,6 +185,7 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
 
     # secrets: password only via stdin, token secret only in the pushed config
     assert (host.path / "fake/chpasswd.stdin").read_text() == "root:correct horse\n"
+    assert (host.path / "fake/ct_authorized_keys").read_text() == host.admin_keys.read_text()
     everything_visible = r.stdout + r.stderr + "\n".join(calls)
     assert "correct horse" not in everything_visible
     assert SECRET not in everything_visible
@@ -234,19 +256,57 @@ def test_dry_run_changes_nothing(host):
     assert not host.state.exists() and not (host.path / "opt").exists()
 
 
-def test_refuses_short_password_and_bad_ssh_key(host):
+def test_refuses_short_password(host):
     r = host.run("install", "--yes", PVEWARDEN_IP="dhcp", PVEWARDEN_ROOT_PASSWORD="abc")
     assert r.returncode == 1 and "at least 5 characters" in r.stderr
-    r = host.run("install", "--yes", PVEWARDEN_IP="dhcp", PVEWARDEN_SSH_KEYS="not a key")
-    assert r.returncode == 1 and "not a file and not an SSH public key" in r.stderr
     assert not any(c.startswith("pct create") for c in host.calls())
 
 
-def test_pasted_ssh_key_is_used(host):
-    r = host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_SSH_KEYS="ssh-ed25519 AAAAPASTED me@pc")
-    assert r.returncode == 0, r.stderr
+def pushed_keys(host, r) -> str:
+    """Content of the key file handed to pct create (copied before the installer cleans up)."""
+    assert r.returncode == 0, r.stdout + r.stderr
     create = next(c for c in host.calls() if c.startswith("pct create"))
-    assert re.search(r"--ssh-public-keys \S+/authorized_keys", create)
+    return re.search(r"--ssh-public-keys (\S+)", create).group(1)
+
+
+def test_pasted_ssh_key_is_used(host, keys):
+    r = host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_SSH_KEYS=keys["pasted"])
+    assert pushed_keys(host, r).endswith("/authorized_keys")
+    assert "1 key(s)" in r.stdout and "(ED25519)" in r.stdout
+
+
+def test_ssh_keys_from_github_and_a_file_with_fingerprints_in_the_summary(host, keys):
+    r = host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_SSH_KEYS=f"gh:alice {host.admin_keys}")
+    pushed_keys(host, r)
+    assert (host.path / "fake/ct_authorized_keys").read_text().splitlines() == [
+        keys["alice1"],
+        keys["alice2"],
+        keys["admin"],
+    ]
+    assert "curl -fsSL --max-time 20 https://github.com/alice.keys" in host.calls()
+    assert "3 key(s) from gh:alice" in r.stdout
+    for name in ("alice1", "alice2", "admin"):
+        fingerprint = subprocess.run(
+            ["ssh-keygen", "-lf", "-"], input=keys[name], capture_output=True, text=True
+        ).stdout.split()[1]
+        assert fingerprint in r.stdout  # the user sees exactly which keys get root
+
+
+@pytest.mark.parametrize(
+    "source, error",
+    [
+        ("gh:nobody", "could not fetch SSH keys from https://github.com/nobody.keys"),
+        ("gl:empty", "no SSH keys published at https://gitlab.com/empty.keys"),
+        ("https://example.com/garbage", "not an SSH public key: <html>"),
+        ("http://example.com/keys", "plain http"),
+        ("not-a-file", "not a key source"),
+        ("ssh-ed25519 AAAAbroken x", "invalid SSH public key"),
+    ],
+)
+def test_bad_ssh_key_sources_stop_before_any_change(host, source, error):
+    r = host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_SSH_KEYS=source)
+    assert r.returncode == 1 and error in r.stderr, r.stderr
+    assert not any(c.startswith(("pct create", "pveum")) for c in host.calls())
 
 
 def test_install_refuses_when_already_installed(host):
@@ -316,7 +376,7 @@ esac
 """
 
 
-def test_interactive_advanced_install_uses_every_answer(host):
+def test_interactive_advanced_install_uses_every_answer(host, keys):
     (host.path / "bin/whiptail").write_text(SCRIPTED_WHIPTAIL)
     answers = [
         "advanced",  # mode
@@ -324,7 +384,7 @@ def test_interactive_advanced_install_uses_every_answer(host):
         "docker0", "20",  # bridge, vlan
         "192.0.2.60/24", "192.0.2.254", "auto", "192.0.2.53", "lan", "0",  # ip, gw, ipv6, dns, search, onboot
         "s3cret-pass", "s3cret-pass",  # root password twice
-        "ssh-ed25519 AAAAPASTED me@pc",  # ssh key
+        keys["pasted"],  # ssh key
         "https", "claude",  # access, agent name
         "yes",  # confirm summary
         "no",  # enroll now?
