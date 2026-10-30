@@ -58,12 +58,15 @@ esac
 SUDO_RULE="$USER_NAME ALL=(root) NOPASSWD: $SBIN/pvewarden-guest check, $SBIN/pvewarden-guest status, $SBIN/pvewarden-guest upgrade-security, $SBIN/pvewarden-guest upgrade-all"
 KEY_LINE="restrict,from=\"$FROM\",command=\"$SBIN/pvewarden-gate\" $PUBKEY"
 
-# check/upgrade need unattended-upgrades and python3-apt (pulled in by it)
-if ! command -v unattended-upgrade >/dev/null; then
-  say "apt-get install unattended-upgrades"
+# check/upgrade need unattended-upgrades (it pulls in python3-apt); minimal images often lack sudo
+missing=()
+command -v unattended-upgrade >/dev/null || missing+=(unattended-upgrades)
+command -v visudo >/dev/null || missing+=(sudo)
+if [ ${#missing[@]} -gt 0 ]; then
+  say "apt-get install ${missing[*]}"
   if real; then
-    if ! { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unattended-upgrades; }; then
-      echo "cannot install unattended-upgrades: does this guest have network and DNS? try 'apt-get update' in it" >&2
+    if ! { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"; }; then
+      echo "cannot install ${missing[*]}: does this guest have network and DNS? try 'apt-get update' in it" >&2
       exit 4
     fi
   fi
