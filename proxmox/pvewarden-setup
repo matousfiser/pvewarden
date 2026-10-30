@@ -17,7 +17,7 @@ set -euo pipefail
 VERSION=0.1.0.dev0
 REPO="${PVEWARDEN_REPO:-matousfiser/pvewarden}"
 POOL=pvewarden
-ROLE=PVEWarden
+ROLE=Warden
 PVE_USER=pvewarden@pve
 TOKEN_NAME=server
 HOST_DIR=${PVEWARDEN_HOST_DIR:-/opt/pvewarden}       # enroll tool and guest scripts on this host
