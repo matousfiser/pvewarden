@@ -36,7 +36,9 @@ if [ ! -f "$ETC/id_ed25519" ]; then
 fi
 
 # config with a fresh HTTP token; the Proxmox part is filled in by hand (or by the installer)
+FRESH=0
 if [ ! -f "$ETC/config.toml" ]; then
+  FRESH=1
   TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
   sed -e "s|^listen = .*|listen = \"$LISTEN\"|" \
       -e "s|^agent = .*|agent = \"$TOKEN\"|" \
@@ -51,7 +53,7 @@ systemctl enable pvewarden >/dev/null
 
 echo
 echo "Installed $("$APP/venv/bin/pvewarden" --version)."
-echo "Next: edit $ETC/config.toml ([proxmox]), then check: runuser -u $SVC_USER -- pvewarden doctor"
+[ "$FRESH" = 1 ] && echo "Next: edit $ETC/config.toml ([proxmox]), then check: runuser -u $SVC_USER -- pvewarden doctor"
 echo
 echo "Guest public key (for pvewarden-enroll / guest/install.sh):"
 cat "$ETC/id_ed25519.pub"
