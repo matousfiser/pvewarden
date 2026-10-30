@@ -63,3 +63,11 @@ async def test_other_methods_and_garbage_are_not_audited(client, audit):
         r = await client.post("/mcp", content=body, headers={"Authorization": f"bearer {TOKEN_A}"})
         assert r.status_code == 200
     assert not audit.path.exists()
+
+
+def test_allowed_hosts_include_configured_names():
+    from pvewarden.config import HTTPConfig
+    from pvewarden.http import allowed_hosts
+
+    cfg = HTTPConfig(listen="192.0.2.10", port=8765, hostnames=("warden.lan",))
+    assert allowed_hosts(cfg) == ["192.0.2.10", "192.0.2.10:8765", "warden.lan", "warden.lan:8765"]

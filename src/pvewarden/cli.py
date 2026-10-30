@@ -25,7 +25,13 @@ def serve(args: argparse.Namespace) -> None:
 
     if cfg.http is None:
         raise ConfigError("--http needs an [http] section in the config")
-    uvicorn.run(build_app(server, cfg.http, app.audit), host=cfg.http.listen, port=cfg.http.port)
+    uvicorn.run(
+        build_app(server, cfg.http, app.audit),
+        host=cfg.http.listen,
+        port=cfg.http.port,
+        ssl_certfile=cfg.http.tls_cert,
+        ssl_keyfile=cfg.http.tls_key,
+    )
 
 
 def check_config(args: argparse.Namespace) -> None:
@@ -33,6 +39,20 @@ def check_config(args: argparse.Namespace) -> None:
     mode = "proxmox" if cfg.proxmox else f"static inventory ({len(cfg.static_guests)} guests)"
     http = f"http on {cfg.http.listen}:{cfg.http.port}, {len(cfg.http.clients)} client(s)" if cfg.http else "no http"
     print(f"config OK: {mode}, {http}")
+
+
+def doctor(args: argparse.Namespace) -> None:
+    import asyncio
+
+    from pvewarden.app import App
+    from pvewarden.doctor import ok, render, run_checks
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    cfg = load(args.config)
+    results = [ok("Config", str(args.config)), *asyncio.run(run_checks(App(cfg)))]
+    print(render(results))
+    if any(r.status == "fail" for r in results):
+        sys.exit(1)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -50,6 +70,8 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=serve)
     p = sub.add_parser("check-config", help="validate the config file and exit")
     p.set_defaults(func=check_config)
+    p = sub.add_parser("doctor", help="check Proxmox access, token privileges and SSH to every guest")
+    p.set_defaults(func=doctor)
 
     args = parser.parse_args(argv)
     try:

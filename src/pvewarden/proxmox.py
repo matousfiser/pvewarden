@@ -35,7 +35,7 @@ class ProxmoxClient:
         verify = cfg.verify_tls
         self._verify = ssl.create_default_context(cafile=verify) if isinstance(verify, str) else verify
 
-    async def request(self, method: str, path: str, **params):
+    async def request(self, method: str, path: str, /, **params):
         async with httpx.AsyncClient(
             base_url=f"https://{self.cfg.host}:{self.cfg.port}/api2/json",
             headers={"Authorization": f"PVEAPIToken={self.cfg.token_id}={self.cfg.token_secret}"},
@@ -64,6 +64,14 @@ class ProxmoxClient:
                 return
             await asyncio.sleep(interval)
         raise ProxmoxError(f"task {upid} timed out after {timeout}s")
+
+    async def version(self) -> str:
+        return (await self.request("GET", "/version"))["version"]
+
+    async def permissions(self, path: str | None = None) -> dict[str, set[str]]:
+        """Effective privileges of this token: for one path (inherited ones included) or per ACL path."""
+        data = await self.request("GET", "/access/permissions", **({"path": path} if path else {}))
+        return {path: {priv for priv, on in privs.items() if on} for path, privs in data.items()}
 
     async def guests(self) -> list[Guest]:
         out = []

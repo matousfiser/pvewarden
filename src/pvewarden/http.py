@@ -73,12 +73,14 @@ class BearerAuth:
         await self.app(scope, replay, send)
 
 
+def allowed_hosts(cfg: HTTPConfig) -> list[str]:
+    """Host header values to accept (DNS-rebinding protection): the listen address and configured names."""
+    return [h for host in (cfg.listen, *cfg.hostnames) for h in (host, f"{host}:{cfg.port}")]
+
+
 def build_app(server: MCPServer, cfg: HTTPConfig, audit: AuditLog):
     if not cfg.clients:
         raise ValueError("no [http.clients] tokens configured")
-    security = TransportSecuritySettings(
-        allowed_hosts=[cfg.listen, f"{cfg.listen}:{cfg.port}"],
-        allowed_origins=[],
-    )
+    security = TransportSecuritySettings(allowed_hosts=allowed_hosts(cfg), allowed_origins=[])
     inner = server.streamable_http_app(host=cfg.listen, transport_security=security)
     return BearerAuth(inner, cfg.clients, audit)

@@ -44,6 +44,14 @@ class HTTPConfig:
     listen: str
     port: int = 8765
     clients: dict[str, str] = field(default_factory=dict)
+    # extra names clients may use in the Host header (e.g. a DNS name matching the TLS certificate)
+    hostnames: tuple[str, ...] = ()
+    tls_cert: Path | None = None
+    tls_key: Path | None = None
+
+    @property
+    def scheme(self) -> str:
+        return "https" if self.tls_cert else "http"
 
 
 @dataclass(frozen=True)
@@ -117,12 +125,21 @@ def parse(data: dict) -> Config:
 
     http = None
     if "http" in data:
-        h = _section(data, "http", {"listen", "port", "clients"}, {"listen"})
+        h = _section(data, "http", {"listen", "port", "clients", "hostnames", "tls_cert", "tls_key"}, {"listen"})
         clients = h.get("clients", {})
         weak = [name for name, token in clients.items() if len(token) < 32 or token == PLACEHOLDER]
         if weak:
             raise ConfigError(f"[http.clients] tokens must be at least 32 characters: {weak}")
-        http = HTTPConfig(listen=h["listen"], port=int(h.get("port", 8765)), clients=dict(clients))
+        if ("tls_cert" in h) != ("tls_key" in h):
+            raise ConfigError("[http] set both tls_cert and tls_key, or neither")
+        http = HTTPConfig(
+            listen=h["listen"],
+            port=int(h.get("port", 8765)),
+            clients=dict(clients),
+            hostnames=tuple(h.get("hostnames", [])),
+            tls_cert=Path(h["tls_cert"]) if "tls_cert" in h else None,
+            tls_key=Path(h["tls_key"]) if "tls_key" in h else None,
+        )
 
     addresses = {int(k): v for k, v in data.get("addresses", {}).items()}
 
