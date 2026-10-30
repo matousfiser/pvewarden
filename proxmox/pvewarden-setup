@@ -15,7 +15,7 @@
 set -euo pipefail
 
 VERSION=0.1.0.dev0
-REPO="${PVEWARDEN_REPO:-OWNER/pvewarden}"
+REPO="${PVEWARDEN_REPO:-matousfiser/pvewarden}"
 POOL=pvewarden
 ROLE=PVEWarden
 PVE_USER=pvewarden@pve

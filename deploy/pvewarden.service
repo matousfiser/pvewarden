@@ -1,5 +1,6 @@
 [Unit]
 Description=pvewarden MCP server (agent-safe patching of Proxmox guests)
+Documentation=https://github.com/matousfiser/pvewarden
 # usually listens on a VPN address: start after the network (and WireGuard, if used) is up
 Wants=network-online.target
 After=network-online.target wg-quick@wg0.service
