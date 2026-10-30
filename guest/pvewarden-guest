@@ -5,11 +5,14 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=300)
 
+# ${distro_id}/${distro_codename} are expanded by unattended-upgrade, not by bash
+# shellcheck disable=SC2016
 ORIGINS_SECURITY=(
   '${distro_id}:${distro_codename}-security'
   '${distro_id}ESMApps:${distro_codename}-apps-security'
   '${distro_id}ESM:${distro_codename}-infra-security'
 )
+# shellcheck disable=SC2016
 ORIGINS_ALL=(
   "${ORIGINS_SECURITY[@]}"
   '${distro_id}:${distro_codename}'
@@ -49,6 +52,7 @@ for p in apt.Cache():
 PY
     ;;
   status)
+    # shellcheck source=/dev/null
     . /etc/os-release
     echo "os=$PRETTY_NAME"
     echo "kernel=$(uname -r)"

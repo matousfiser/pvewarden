@@ -205,7 +205,9 @@ class App:
         self.require(g, self.cfg.policy.tag_reboot)
         await self.require_proxmox().reboot(g)
         self.audit.write("reboot", vmid=vmid)
-        for _ in range(int(wait_s / interval)):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + wait_s
+        while loop.time() < deadline:
             await asyncio.sleep(interval)
             try:
                 return {"vmid": vmid, "name": g.name, "back_online": True, **await self.status(g)}

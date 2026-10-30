@@ -31,6 +31,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "respx>=0.22",
     "ruff>=0.8",
+    "shellcheck-py>=0.11.0.1",
 ]
 
 [build-system]
@@ -51,4 +52,11 @@ ignore = ["ASYNC109", "ASYNC230"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: needs Docker and network (run with -m integration)"]
+addopts = "-m 'not integration'"
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff.lint.per-file-ignores]
+# test data (long literal outputs) and fakes may break these
+"tests/**" = ["E501", "ASYNC240"]

@@ -3,6 +3,7 @@
 #   pvewarden-enroll [--pool] [--tags tag1,tag2] VMID...   install, optionally add to pool / merge tags
 #   pvewarden-enroll --all                                 re-install on every guest in the pool
 #   pvewarden-enroll --uninstall VMID...                   remove the client from guests
+#   --dry-run (with any of the above)                      show what would change, change nothing
 set -euo pipefail
 
 CONF=${PVEWARDEN_ENROLL_CONF:-/etc/pvewarden/enroll.conf}
@@ -14,7 +15,7 @@ POOL=pvewarden
 : "${PUBKEY:?PUBKEY missing in $CONF}" "${FROM:?FROM missing in $CONF}"
 
 usage() {
-  sed -n '3,5s/^#  //p' "$0"
+  sed -n '3,6s/^#  //p' "$0"
   exit 2
 }
 
@@ -79,6 +80,8 @@ add_to_pool() {
   local id=$1
   if pool_members | grep -qx "$id"; then
     echo "already in pool $POOL"
+  elif [ "$DRY_RUN" = 1 ]; then
+    echo "would: add to pool $POOL"
   else
     pveum pool modify "$POOL" --vms "$id" && echo "added to pool $POOL"
   fi
@@ -90,10 +93,14 @@ merge_tags() {
   current=$($cmd config "$id" | sed -n 's/^tags: //p')
   # shellcheck disable=SC2086  # word splitting of tag lists is intended
   merged=$(printf '%s\n' ${current//;/ } ${TAGS//,/ } | sort -u | paste -sd';')
-  $cmd set "$id" --tags "$merged" && echo "tags: $merged"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "would: set tags $merged"
+  else
+    $cmd set "$id" --tags "$merged" && echo "tags: $merged"
+  fi
 }
 
-DO_POOL=0 TAGS="" UNINSTALL=0 IDS=()
+DO_POOL=0 TAGS="" UNINSTALL=0 DRY_RUN=0 IDS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --pool) DO_POOL=1 ;;
@@ -103,6 +110,7 @@ while [ $# -gt 0 ]; do
       ;;
     --all) mapfile -t IDS < <(pool_members) ;;
     --uninstall) UNINSTALL=1 ;;
+    --dry-run) DRY_RUN=1 ;;
     -h | --help) usage ;;
     [0-9]*) IDS+=("$1") ;;
     *) usage ;;
@@ -112,6 +120,7 @@ done
 [ ${#IDS[@]} -gt 0 ] || usage
 
 if [ "$UNINSTALL" = 1 ]; then ARGS=(--uninstall); else ARGS=("$PUBKEY" "$FROM"); fi
+[ "$DRY_RUN" = 1 ] && ARGS=(--dry-run "${ARGS[@]}")
 
 failed=()
 for id in "${IDS[@]}"; do
