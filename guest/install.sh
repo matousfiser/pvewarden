@@ -5,6 +5,8 @@
 # --dry-run prints what would change and changes nothing.
 # Usually run for you by pvewarden-enroll on the Proxmox host.
 set -euo pipefail
+# pct exec passes the host locale, which the guest may not have: apt and perl then warn on every call
+export LC_ALL=C.UTF-8
 USER_NAME=pvewarden
 SBIN=/usr/local/sbin
 SUDOERS=/etc/sudoers.d/pvewarden
@@ -60,8 +62,10 @@ KEY_LINE="restrict,from=\"$FROM\",command=\"$SBIN/pvewarden-gate\" $PUBKEY"
 if ! command -v unattended-upgrade >/dev/null; then
   say "apt-get install unattended-upgrades"
   if real; then
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unattended-upgrades
+    if ! { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unattended-upgrades; }; then
+      echo "cannot install unattended-upgrades: does this guest have network and DNS? try 'apt-get update' in it" >&2
+      exit 4
+    fi
   fi
 fi
 

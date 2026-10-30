@@ -140,3 +140,19 @@ async def test_permissions_for_a_path(pve):
     )
     assert await pve.permissions("/vms/101") == {"/vms/101": {"VM.Audit", "VM.Snapshot"}}
     assert route.calls.last.request.url.params["path"] == "/vms/101"
+
+
+def test_pinned_ca_tolerates_the_proxmox_root_ca(tmp_path):
+    # Python 3.13 rejects CAs without a key usage extension (VERIFY_X509_STRICT); pve-root-ca.pem has none
+    import ssl
+    import subprocess
+
+    ca = tmp_path / "ca.pem"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+         "-subj", "/CN=Proxmox Virtual Environment", "-keyout", tmp_path / "ca.key", "-out", ca],
+        check=True, capture_output=True,
+    )  # fmt: skip
+    client = ProxmoxClient(ProxmoxConfig(host="pve", token_id="t", token_secret="s", verify_tls=str(ca)))
+    assert not client._verify.verify_flags & ssl.VERIFY_X509_STRICT
+    assert client._verify.verify_mode == ssl.CERT_REQUIRED and client._verify.check_hostname
