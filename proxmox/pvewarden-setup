@@ -485,14 +485,20 @@ EOF
     local san="IP:$LISTEN,DNS:$CT_HOSTNAME"
     run pct exec "$CTID" -- openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1095 \
       -subj "/CN=$CT_HOSTNAME" -addext "subjectAltName=$san" -keyout "$CT_ETC/tls.key" -out "$CT_ETC/tls.crt"
-    run pct exec "$CTID" -- sh -c "chown root:pvewarden $CT_ETC/tls.key && chmod 0640 $CT_ETC/tls.key"
+    run pct exec "$CTID" -- sh -c "chown root:pvewarden $CT_ETC/tls.key && chmod 0640 $CT_ETC/tls.key && chmod 0644 $CT_ETC/tls.crt"
   fi
 }
 
+SETUP_PROBLEMS=""
 start_server() {
   run pct exec "$CTID" -- systemctl restart pvewarden
   info "checking the setup (pvewarden doctor)"
-  run pct exec "$CTID" -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor || true
+  run pct exec "$CTID" -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor || SETUP_PROBLEMS="doctor reported failures (see above)"
+  [ "$DRY_RUN" = 1 ] && return 0
+  sleep 2
+  if ! pct exec "$CTID" -- systemctl is-active --quiet pvewarden; then
+    SETUP_PROBLEMS="${SETUP_PROBLEMS:+$SETUP_PROBLEMS; }the service is not running (pct exec $CTID -- journalctl -u pvewarden -n 30)"
+  fi
 }
 
 install_enroll_tool() {
@@ -528,7 +534,7 @@ final_message() {
   cat <<EOF
 
 ================================================================================
- pvewarden is installed.
+ pvewarden is installed.$([ -n "$SETUP_PROBLEMS" ] && printf '\n\n !!! but it is not working yet: %s\n !!! fix that, then run: pct exec %s -- runuser -u pvewarden -- pvewarden doctor' "$SETUP_PROBLEMS" "$CTID")
 
  MCP endpoint   $url
  Agent token    $AGENT_TOKEN

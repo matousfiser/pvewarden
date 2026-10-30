@@ -33,7 +33,12 @@ class ProxmoxClient:
     def __init__(self, cfg: ProxmoxConfig):
         self.cfg = cfg
         verify = cfg.verify_tls
-        self._verify = ssl.create_default_context(cafile=verify) if isinstance(verify, str) else verify
+        if isinstance(verify, str):
+            verify = ssl.create_default_context(cafile=verify)
+            # Python 3.13 enables strict X.509 checks by default; the Proxmox root CA has no key usage
+            # extension and fails them. The CA is pinned to this one file, so the relaxed check is safe.
+            verify.verify_flags &= ~ssl.VERIFY_X509_STRICT
+        self._verify = verify
 
     async def request(self, method: str, path: str, /, **params):
         async with httpx.AsyncClient(
