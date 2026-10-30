@@ -33,7 +33,17 @@ TAG_REBOOT=pvewarden-reboot
 
 DRY_RUN=0 YES=0 SOURCE="" COMMAND=""
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+CREATED_CT=""  # set once a container exists, so a failed install can say what it left behind
+cleanup() {
+  local rc=$?
+  rm -rf "$WORK"
+  if [ "$rc" != 0 ] && [ -n "$CREATED_CT" ]; then
+    echo "pvewarden-setup: the install stopped; container $CREATED_CT was already created." >&2
+    echo "  inspect it:  pct start $CREATED_CT --debug" >&2
+    echo "  remove it:   pct stop $CREATED_CT; pct destroy $CREATED_CT --purge" >&2
+  fi
+}
+trap cleanup EXIT
 
 # ============================================================================================
 # output and dialogs
@@ -316,8 +326,12 @@ EOF
 
 ensure_template() {
   [ "$DRY_RUN" = 1 ] || pveam update >/dev/null || true
-  TEMPLATE=$(pveam available --section system | awk '{print $2}' | grep "^debian-$DEBIAN-standard" | sort -V | tail -1)
-  [ -n "$TEMPLATE" ] || die "no Debian $DEBIAN template found in 'pveam available'"
+  # the template index lists several architectures: a foreign one fails only at start ("Exec format error")
+  local arch
+  arch=$(dpkg --print-architecture)
+  TEMPLATE=$(pveam available --section system | awk '{print $2}' | grep "^debian-$DEBIAN-standard_.*_$arch\.tar" |
+    sort -V | tail -1 || true)
+  [ -n "$TEMPLATE" ] || die "no Debian $DEBIAN template for $arch found in 'pveam available'"
   if ! pveam list "$TEMPLATE_STORAGE" | grep -q "$TEMPLATE"; then
     info "downloading template $TEMPLATE"
     run pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
@@ -339,6 +353,7 @@ create_container() {
   [ -n "$SSH_KEYS_FILE" ] && args+=(--ssh-public-keys "$SSH_KEYS_FILE")
   info "creating container $CTID"
   run pct create "$CTID" "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" "${args[@]}"
+  [ "$DRY_RUN" = 1 ] || CREATED_CT=$CTID
   run pct start "$CTID"
   if [ -n "$ROOT_PASSWORD" ]; then
     # via stdin: the password never appears in a process list or log
@@ -502,7 +517,12 @@ final_message() {
   local scheme url fingerprint=""
   scheme=$([ "$USE_TLS" = yes ] && echo https || echo http)
   url="$scheme://$LISTEN:8765/mcp"
-  if [ "$USE_TLS" = yes ] && [ "$DRY_RUN" = 0 ]; then
+  if [ "$DRY_RUN" = 1 ]; then
+    printf '\nDry run finished: nothing was changed. The real install ends with the MCP endpoint\n'
+    printf '(%s) and a one-time agent token.\n' "$url"
+    return 0
+  fi
+  if [ "$USE_TLS" = yes ]; then
     fingerprint=$(pct exec "$CTID" -- openssl x509 -in "$CT_ETC/tls.crt" -noout -fingerprint -sha256 | cut -d= -f2)
   fi
   cat <<EOF
@@ -552,7 +572,8 @@ do_install() {
   start_server
   install_enroll_tool
   final_message
-  if [ "$YES" = 0 ] && confirm "Enroll guests now?"; then do_enroll; fi
+  CREATED_CT=""  # installed: nothing left half-done
+  if [ "$YES" = 0 ] && [ "$DRY_RUN" = 0 ] && confirm "Enroll guests now?"; then do_enroll; fi
 }
 
 # ============================================================================================

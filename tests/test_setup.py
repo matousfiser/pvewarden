@@ -23,8 +23,10 @@ case "$*" in
   *vztmpl*) echo "local dir active 1 1 1 1%" ;;
 esac
 """,
+    "dpkg": 'echo "${FAKE_ARCH:-amd64}"\n',
     "pveam": """case "$1" in
-  available) printf 'system          debian-12-standard_12.7-1_amd64.tar.zst\\nsystem          debian-13-standard_13.1-1_amd64.tar.zst\\nsystem          debian-13-standard_13.0-1_amd64.tar.zst\\n' ;;
+  available) printf 'system          %s\\n' debian-12-standard_12.7-1_amd64.tar.zst debian-13-standard_13.1-1_amd64.tar.zst \\
+    debian-13-standard_13.0-1_amd64.tar.zst debian-13-standard_13.6-1_arm64.tar.zst ;;
   list) echo "NAME SIZE" ;;
 esac
 """,
@@ -44,6 +46,7 @@ esac
 esac
 """,
     "pct": """case "$1" in
+  start) [ -z "$FAKE_START_FAILS" ] || { echo "startup for container '$2' failed" >&2; exit 1; } ;;
   create) while [ $# -gt 0 ]; do [ "$1" = --ssh-public-keys ] && cp "$2" "$FAKE/ct_authorized_keys"; shift; done ;;
   status) [ -f "$FAKE/ct" ] && echo "status: running" || exit 2 ;;
   push) mkdir -p "$FAKE/pushed"; cp "$3" "$FAKE/pushed/$(echo "$4" | tr / _)" ;;
@@ -254,6 +257,20 @@ def test_dry_run_changes_nothing(host):
     assert not [c for c in host.calls() if c.startswith(changing)]
     assert "would run: pct create 120" in r.stdout
     assert not host.state.exists() and not (host.path / "opt").exists()
+    assert "nothing was changed" in r.stdout and "Bearer" not in r.stdout
+
+
+def test_template_matches_the_host_architecture(host):
+    assert host.run("install", "--yes", **INSTALL_ENV, FAKE_ARCH="arm64").returncode == 0
+    assert any("debian-13-standard_13.6-1_arm64" in c for c in host.calls() if c.startswith("pct create"))
+    r = host.run("install", "--yes", **INSTALL_ENV, FAKE_ARCH="riscv64")
+    assert r.returncode != 0 and "no Debian 13 template for riscv64" in r.stderr
+
+
+def test_failed_install_says_what_it_left_behind(host):
+    r = host.run("install", "--yes", **INSTALL_ENV, FAKE_START_FAILS="1")
+    assert r.returncode != 0
+    assert "container 120 was already created" in r.stderr and "pct destroy 120" in r.stderr
 
 
 def test_refuses_short_password(host):
