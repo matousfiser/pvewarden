@@ -49,8 +49,8 @@ esac
 # shellcheck source=/dev/null
 . /etc/os-release
 case "$ID" in
-  ubuntu) ;;
-  *) echo "unsupported distribution: $ID (supported: ubuntu)" >&2; exit 3 ;;
+  ubuntu | debian) ;;
+  *) echo "unsupported distribution: $ID (supported: ubuntu, debian)" >&2; exit 3 ;;
 esac
 
 SUDO_RULE="$USER_NAME ALL=(root) NOPASSWD: $SBIN/pvewarden-guest check, $SBIN/pvewarden-guest status, $SBIN/pvewarden-guest upgrade-security, $SBIN/pvewarden-guest upgrade-all"

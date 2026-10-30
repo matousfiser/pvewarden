@@ -21,7 +21,7 @@ def sh(*args, check=True, **kwargs):
     return subprocess.run(args, capture_output=True, text=True, check=check, **kwargs)
 
 
-@pytest.fixture(scope="module", params=["ubuntu:24.04", "ubuntu:22.04"])
+@pytest.fixture(scope="module", params=["ubuntu:24.04", "ubuntu:22.04", "debian:12", "debian:13"])
 def guest(request, tmp_path_factory):
     if not shutil.which("docker") or sh("docker", "info", check=False).returncode != 0:
         pytest.skip("docker not available")
@@ -64,7 +64,7 @@ async def test_status(guest):
     rc, out = await guest["runner"].run(guest["address"], "status", timeout=60)
     assert rc == 0, out
     st = parse_status(out)
-    assert st["os"].startswith("Ubuntu") and "kernel" in st
+    assert st["os"].split()[0] == guest["image"].split(":")[0].capitalize() and "kernel" in st
 
 
 async def test_services_runs_without_root(guest):
@@ -78,7 +78,7 @@ async def test_check_lists_packages_in_the_expected_format(guest):
     assert rc == 0, out
     pkgs = parse_upgradable(out)
     assert bool(pkgs) == bool(out.strip())  # every line parsed
-    assert all(p["official"] for p in pkgs)  # base image has only Ubuntu repositories
+    assert all(p["official"] for p in pkgs)  # base image has only the distribution repositories
 
 
 @pytest.mark.parametrize("command", ["id", "check; id", "bash -i", "cat /etc/shadow", "sudo -l"])
@@ -101,6 +101,46 @@ def test_sudo_allows_only_the_four_commands(guest):
     assert len(allowed) == 1 and allowed[0].count("/usr/local/sbin/pvewarden-guest") == 4
 
 
+# A third-party repository that names its suite after the distribution, like Docker's does.
+THIRD_PARTY_REPO = r"""
+set -e
+. /etc/os-release
+mkdir -p /srv/repo
+for v in 1.0 2.0; do
+  d=$(mktemp -d); mkdir "$d/DEBIAN"
+  printf 'Package: pvewarden-dummy\nVersion: %s\nArchitecture: all\nMaintainer: t <t@example.com>\nDescription: d\n' "$v" > "$d/DEBIAN/control"
+  dpkg-deb -b "$d" "/srv/repo/pvewarden-dummy_${v}_all.deb" >/dev/null
+done
+cd /srv/repo
+apt-ftparchive packages . > Packages
+apt-ftparchive -o APT::FTPArchive::Release::Origin=Thirdparty -o APT::FTPArchive::Release::Label=Thirdparty \
+  -o APT::FTPArchive::Release::Suite="$VERSION_CODENAME" -o APT::FTPArchive::Release::Codename="$VERSION_CODENAME" \
+  release . > Release
+echo "deb [trusted=yes] file:/srv/repo ./" > /etc/apt/sources.list.d/thirdparty.list
+apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq pvewarden-dummy=1.0 >/dev/null
+"""
+
+
+async def test_upgrade_all_never_installs_third_party_packages(guest):
+    setup = sh("docker", "exec", guest["name"], "bash", "-c", THIRD_PARTY_REPO, check=False, timeout=300)
+    assert setup.returncode == 0, setup.stderr
+
+    rc, out = await guest["runner"].run(guest["address"], "check", timeout=300)
+    dummy = {p["name"]: p for p in parse_upgradable(out)}["pvewarden-dummy"]
+    assert (dummy["from"], dummy["to"], dummy["official"]) == ("1.0", "2.0", False)
+
+    rc, out = await guest["runner"].run(guest["address"], "upgrade-all", timeout=900)
+    assert rc == 0, out[-2000:]
+    installed = sh("docker", "exec", guest["name"], "dpkg-query", "-W", "-f=${Version}", "pvewarden-dummy").stdout
+    assert installed == "1.0"
+
+    rc, out = await guest["runner"].run(guest["address"], "check", timeout=300)
+    official_left = [p["name"] for p in parse_upgradable(out) if p["official"]]
+    assert official_left == [], f"official updates not installed: {official_left}"
+
+
+# must stay last: it removes the client from the shared container
 def test_reinstall_is_idempotent_and_uninstall_cleans_up(guest):
     key = (guest["key"].with_suffix(".pub")).read_text().strip()
     gw = sh("docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}", guest["name"]).stdout

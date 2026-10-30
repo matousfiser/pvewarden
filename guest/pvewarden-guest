@@ -5,19 +5,39 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=300)
 
-# ${distro_id}/${distro_codename} are expanded by unattended-upgrade, not by bash
+# Official archives per distribution, as unattended-upgrade Origins-Pattern entries.
+# ${distro_codename} is expanded by unattended-upgrade, not by bash.
+# shellcheck source=/dev/null
+. /etc/os-release
 # shellcheck disable=SC2016
-ORIGINS_SECURITY=(
-  '${distro_id}:${distro_codename}-security'
-  '${distro_id}ESMApps:${distro_codename}-apps-security'
-  '${distro_id}ESM:${distro_codename}-infra-security'
-)
-# shellcheck disable=SC2016
-ORIGINS_ALL=(
-  "${ORIGINS_SECURITY[@]}"
-  '${distro_id}:${distro_codename}'
-  '${distro_id}:${distro_codename}-updates'
-)
+case "$ID" in
+  ubuntu)
+    SECURITY=(
+      'origin=Ubuntu,archive=${distro_codename}-security'
+      'origin=UbuntuESMApps,archive=${distro_codename}-apps-security'
+      'origin=UbuntuESM,archive=${distro_codename}-infra-security'
+    )
+    REGULAR=(
+      'origin=Ubuntu,archive=${distro_codename}'
+      'origin=Ubuntu,archive=${distro_codename}-updates'
+    )
+    ;;
+  debian)
+    SECURITY=(
+      'origin=Debian,codename=${distro_codename}-security,label=Debian-Security'
+      'origin=Debian,codename=${distro_codename},label=Debian-Security'
+    )
+    # point releases land in the release itself; -updates carries stable-updates
+    REGULAR=(
+      'origin=Debian,codename=${distro_codename},label=Debian'
+      'origin=Debian,codename=${distro_codename}-updates,label=Debian'
+    )
+    ;;
+  *)
+    echo "unsupported distribution: $ID" >&2
+    exit 3
+    ;;
+esac
 
 # Run unattended-upgrade allowed to install only from the given official origins.
 # Origins configured on the guest itself (e.g. third-party repos) are cleared for this run.
@@ -28,7 +48,7 @@ upgrade_from() {
   {
     echo '#clear Unattended-Upgrade::Allowed-Origins;'
     echo '#clear Unattended-Upgrade::Origins-Pattern;'
-    echo 'Unattended-Upgrade::Allowed-Origins {'
+    echo 'Unattended-Upgrade::Origins-Pattern {'
     printf '  "%s";\n' "$@"
     echo '};'
   } > "$dir/main.conf"
@@ -52,8 +72,6 @@ for p in apt.Cache():
 PY
     ;;
   status)
-    # shellcheck source=/dev/null
-    . /etc/os-release
     echo "os=$PRETTY_NAME"
     echo "kernel=$(uname -r)"
     echo "uptime_s=$(cut -d' ' -f1 /proc/uptime)"
@@ -63,11 +81,11 @@ PY
     ;;
   upgrade-security)
     apt-get update -qq "${APT_OPTS[@]}"
-    upgrade_from "${ORIGINS_SECURITY[@]}"
+    upgrade_from "${SECURITY[@]}"
     ;;
   upgrade-all)
     apt-get update -qq "${APT_OPTS[@]}"
-    upgrade_from "${ORIGINS_ALL[@]}"
+    upgrade_from "${SECURITY[@]}" "${REGULAR[@]}"
     ;;
   *)
     echo "usage: pvewarden-guest check|status|upgrade-security|upgrade-all" >&2
