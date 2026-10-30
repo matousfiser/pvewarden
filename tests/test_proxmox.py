@@ -111,3 +111,32 @@ async def test_snapshots_hide_current(pve):
         json={"data": [{"name": "current"}, {"name": "pvewarden_1", "snaptime": 1}]}
     )
     assert [s["name"] for s in await pve.snapshots(CT)] == ["pvewarden_1"]
+
+
+@respx.mock
+async def test_cluster_operations_go_to_the_guests_node(pve):
+    respx.get(f"{API}/cluster/resources").respond(
+        json={
+            "data": [
+                {"vmid": 101, "name": "a", "type": "lxc", "node": "pve1", "status": "running"},
+                {"vmid": 202, "name": "b", "type": "qemu", "node": "pve2", "status": "running"},
+            ]
+        }
+    )
+    upid = "UPID:pve2:0003:snap"
+    snap = respx.post(f"{API}/nodes/pve2/qemu/202/snapshot").respond(json={"data": upid})
+    task = respx.get(f"{API}/nodes/pve2/tasks/{upid}/status").respond(
+        json={"data": {"status": "stopped", "exitstatus": "OK"}}
+    )
+    guest = {g.vmid: g for g in await pve.guests()}[202]
+    await pve.create_snapshot(guest, "pvewarden_x", "d")
+    assert snap.called and task.called
+
+
+@respx.mock
+async def test_permissions_for_a_path(pve):
+    route = respx.get(f"{API}/access/permissions").respond(
+        json={"data": {"/vms/101": {"VM.Audit": 1, "VM.Snapshot": 1, "VM.Allocate": 0}}}
+    )
+    assert await pve.permissions("/vms/101") == {"/vms/101": {"VM.Audit", "VM.Snapshot"}}
+    assert route.calls.last.request.url.params["path"] == "/vms/101"

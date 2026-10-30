@@ -31,6 +31,11 @@ tag_reboot = "pvewarden-reboot"
 # Address to listen on: keep it on a VPN or management network
 listen = "192.0.2.10"
 port = 8765
+# Other names clients use to reach this server (must match what they put in the URL)
+# hostnames = ["pvewarden.example.lan"]
+# HTTPS: recommended whenever the network between agent and server is not already encrypted (VPN)
+# tls_cert = "/etc/pvewarden/tls.crt"
+# tls_key = "/etc/pvewarden/tls.key"
 
 [http.clients]
 # name = "token" (at least 32 characters); the name is written to the audit log.

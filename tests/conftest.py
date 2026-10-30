@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from pvewarden.app import App
-from pvewarden.config import parse
+from pvewarden.config import ProxmoxConfig, parse
 from pvewarden.errors import ProxmoxError
 from pvewarden.proxmox import Guest
 
@@ -51,11 +51,22 @@ class FakeProxmox:
     """Replaces ProxmoxClient with in-memory guests and snapshots."""
 
     def __init__(self, guests: list[Guest]):
+        self.cfg = ProxmoxConfig(host="pve.test", token_id="pvewarden@pve!t", token_secret="s", verify_tls="/ca.pem")
+        self.pve_version = "9.0.10"
+        self.privs: dict[str, set[str]] = {}
         self._guests = {g.vmid: g for g in guests}
         self.ips: dict[int, list[str]] = {}
         self.snaps: dict[int, list[dict]] = {g.vmid: [] for g in guests}
         self.events: list[tuple] = []
         self.fail_snapshot = False
+
+    async def version(self):
+        return self.pve_version
+
+    async def permissions(self, path=None):
+        if path:
+            return {path: self.privs.get(path, set())}
+        return dict(self.privs)
 
     async def guests(self):
         return list(self._guests.values())

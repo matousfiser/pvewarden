@@ -80,3 +80,11 @@ def test_example_config_is_valid_once_secrets_are_filled():
     cfg = parse(tomllib.loads(text))
     assert cfg.proxmox is not None
     assert cfg.http is not None and "agent" in cfg.http.clients
+
+
+def test_http_tls_needs_cert_and_key():
+    with pytest.raises(ConfigError, match="tls_cert and tls_key"):
+        parse(minimal(http={"listen": "192.0.2.1", "tls_cert": "/c.pem"}))
+    cfg = parse(minimal(http={"listen": "192.0.2.1", "tls_cert": "/c", "tls_key": "/k", "hostnames": ["w.lan"]}))
+    assert cfg.http.scheme == "https" and cfg.http.hostnames == ("w.lan",)
+    assert parse(minimal(http={"listen": "192.0.2.1"})).http.scheme == "http"
