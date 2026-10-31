@@ -206,15 +206,22 @@ class App:
         self.require(g, self.cfg.policy.tag_reboot)
         await self.require_proxmox().reboot(g)
         self.audit.write("reboot", vmid=vmid)
+        return {"vmid": vmid, "name": g.name, **await self._wait_online(g, wait_s, interval)}
+
+    async def _wait_online(self, g: Guest, wait_s: int, interval: float, check_first: bool = False) -> dict:
+        """Wait until the guest answers over SSH again. After a reboot the first check waits:
+        right after the request the old system may still answer; after a fresh start it need not."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + wait_s
         while loop.time() < deadline:
-            await asyncio.sleep(interval)
+            if not check_first:
+                await asyncio.sleep(interval)
+            check_first = False
             try:
-                return {"vmid": vmid, "name": g.name, "back_online": True, **await self.status(g)}
+                return {"back_online": True, **await self.status(g)}
             except Exception:
                 continue
-        return {"vmid": vmid, "name": g.name, "back_online": False}
+        return {"back_online": False}
 
     async def list_snapshots(self, vmid: int) -> list[dict]:
         g = await self.guest(vmid)
@@ -239,7 +246,7 @@ class App:
             raise NotFoundError(f"guest {vmid} has no snapshot {snapshot!r}")
         return {"vmid": vmid, "name": g.name, **{k: found[k] for k in ("description", "created")}, "snapshot": snapshot}
 
-    async def rollback(self, vmid: int, snapshot: str) -> dict:
+    async def rollback(self, vmid: int, snapshot: str, wait_s: int = 300, interval: float = 5) -> dict:
         await self.rollback_plan(vmid, snapshot)
         g = await self.guest(vmid)
         pve = self.require_proxmox()
@@ -249,7 +256,10 @@ class App:
             await pve.start(g)
             started = True
         self.audit.write("rollback", vmid=vmid, snapshot=snapshot)
-        return {"vmid": vmid, "name": g.name, "rolled_back_to": snapshot, "started_after_rollback": started}
+        res = {"vmid": vmid, "name": g.name, "rolled_back_to": snapshot, "started_after_rollback": started}
+        if started:  # like a reboot: report once the guest answers again, not while it still boots
+            res |= await self._wait_online(g, wait_s, interval, check_first=True)
+        return res
 
     async def old_snapshots(self, older_than_days: int = 7, vmid: int | None = None) -> list[dict]:
         """pvewarden snapshots older than N days that delete_old_snapshots would remove."""

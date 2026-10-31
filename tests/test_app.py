@@ -160,8 +160,11 @@ async def test_rollback_only_own_snapshots_and_starts_guest(app):
         await app.rollback(101, SNAPSHOT_PREFIX + "20260101_000000")
     assert app.pve.events == []
     app.pve.snaps[101] = [{"name": SNAPSHOT_PREFIX + "20260101_000000", "snaptime": 1_767_225_600}]
-    res = await app.rollback(101, SNAPSHOT_PREFIX + "20260101_000000")
-    assert res["started_after_rollback"] is True
+    # like after a reboot: the result comes once SSH answers again, not while the guest still boots
+    attempts = iter([(255, "Connection refused"), (0, "kernel=6.8.0-2\nreboot_required=no\n")])
+    app.runner.responses["status"] = lambda addr: next(attempts)
+    res = await app.rollback(101, SNAPSHOT_PREFIX + "20260101_000000", interval=0)
+    assert res["started_after_rollback"] is True and res["back_online"] is True
     assert [e[0] for e in app.pve.events] == ["rollback", "start"]
 
 
