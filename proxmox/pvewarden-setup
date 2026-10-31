@@ -730,11 +730,12 @@ connect_steps() {
     section "1. Plain HTTP: nothing to trust"
     echo " Use it only inside a network you trust (VPN, LAN)."
   fi
-  section "2. Add the server to Claude Code"
-  claude_add "$url" "$token"
+  section "2. Add the server to your agent"
+  echo " Any MCP client: add a remote MCP server (streamable HTTP) with the address"
+  echo " and header above. Examples for other clients: docs/clients.md"
   echo
-  echo " Other agents: their \"add MCP server\" setting with the address and header"
-  echo " above, or the JSON in docs/clients.md."
+  printf ' %sClaude Code:%s\n\n' "$C_BOLD" "$C_OFF"
+  claude_add "$url" "$token"
   section "3. Restart the agent and ask: \"What updates are pending?\""
 }
 
@@ -960,11 +961,13 @@ do_token() {
   connection_fields "$url" "$token"
   echo
   echo " ${C_KEY}The token is shown only now.${C_OFF} The old one no longer works."
-  section "Replace it in Claude Code, then restart claude"
+  section "Replace the token in every agent that uses it"
+  echo " Any MCP client: put the new header into its pvewarden server settings and"
+  echo " restart it. Examples for other clients: docs/clients.md"
+  echo
+  printf ' %sClaude Code:%s\n\n' "$C_BOLD" "$C_OFF"
   echo "claude mcp remove --scope user pvewarden"
   claude_add "$url" "$token"
-  echo
-  echo " Other MCP clients: replace the header in their settings (docs/clients.md)."
   line '='
 }
 

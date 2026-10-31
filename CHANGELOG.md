@@ -5,6 +5,8 @@
 - `pvewarden-setup`: the install summary, `connect` and `token` output are laid out in clear
   sections that fit 80 columns. Long commands start at the left edge, so they wrap cleanly and copy
   well. Colors appear on a terminal, never with `NO_COLOR` or when the output is redirected.
+- The connection steps and the `token` output describe any MCP client first; Claude Code is one
+  example.
 
 ## 0.1.0 (2026-10-31)
 
