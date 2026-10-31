@@ -22,6 +22,7 @@ PVE_USER=pvewarden@pve
 TOKEN_NAME=server
 HOST_DIR=${PVEWARDEN_HOST_DIR:-/opt/pvewarden}       # enroll tool and guest scripts on this host
 ETC=${PVEWARDEN_HOST_ETC:-/etc/pvewarden}            # enroll.conf and setup state on this host
+export PVEWARDEN_ENROLL_CONF=${PVEWARDEN_ENROLL_CONF:-$ETC/enroll.conf} # where pvewarden-enroll looks
 SBIN=${PVEWARDEN_SBIN:-/usr/local/sbin}
 CT_ETC=/etc/pvewarden                                # server config inside the container
 PVE_ETC=${PVE_ETC:-/etc/pve}
@@ -684,11 +685,15 @@ do_install() {
   install_server
   write_server_config
   save_state
-  start_server
   install_enroll_tool
+  CREATED_CT="" # installed: nothing left half-done
+  # enroll before the check and the summary: doctor then sees the guests, and the summary
+  # (endpoint, token) is the last thing on screen. A subshell, so a cancel does not end the install.
+  if [ "$YES" = 0 ] && [ "$DRY_RUN" = 0 ] && confirm "Enroll guests now?"; then
+    (do_enroll) || echo "enrolling did not finish; run it any time: pvewarden-setup enroll"
+  fi
+  start_server
   final_message
-  CREATED_CT=""  # installed: nothing left half-done
-  if [ "$YES" = 0 ] && [ "$DRY_RUN" = 0 ] && confirm "Enroll guests now?"; then do_enroll; fi
 }
 
 # ============================================================================================

@@ -541,3 +541,35 @@ def test_runs_from_a_git_checkout_without_source(host):
     assert r.returncode == 0, r.stderr
     assert f"using the source tree this script runs from: {ROOT}" in r.stdout
     assert "releases/download" not in r.stdout
+
+
+BASIC_INSTALL_ANSWERS = [
+    "advanced",
+    "130", "warden", "tank", "8", "2", "1024", "0",
+    "docker0", "20",
+    "192.0.2.60/24", "192.0.2.254", "auto", "192.0.2.53", "lan", "0",
+    "", "",  # no root password
+    "done",  # no ssh keys
+    "https", "claude",
+    "yes",  # confirm summary
+]  # fmt: skip
+
+
+def test_interactive_install_enrolls_before_check_and_summary(host):
+    (host.path / "bin/whiptail").write_text(SCRIPTED_WHIPTAIL)
+    answers = [*BASIC_INSTALL_ANSWERS, "yes", "101", "update", "keep"]  # enroll now: guest, level, auto-updates
+    (host.path / "fake/answers").write_text("\n".join(answers) + "\n")
+    r = host.run("install")
+    assert r.returncode == 0, r.stdout + r.stderr
+    # install put the real pvewarden-enroll in place; it runs against the stub pct
+    assert r.stdout.index("=== 101") < r.stdout.index("checking the setup (pvewarden doctor)")
+    assert r.stdout.rstrip().endswith("=" * 80)  # the summary is the last thing on screen
+
+
+def test_cancelled_enroll_does_not_abort_the_install(host):
+    (host.path / "bin/whiptail").write_text(SCRIPTED_WHIPTAIL)
+    (host.path / "fake/answers").write_text("\n".join([*BASIC_INSTALL_ANSWERS, "yes", "<cancel>"]) + "\n")
+    r = host.run("install")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "enrolling did not finish; run it any time: pvewarden-setup enroll" in r.stdout
+    assert "pvewarden is installed." in r.stdout

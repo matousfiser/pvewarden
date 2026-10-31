@@ -110,7 +110,7 @@ say "write $SUDOERS: $SUDO_RULE"
 if real; then
   tmp=$(mktemp)
   printf '# pvewarden: the only commands the pvewarden user may run as root\n%s\n' "$SUDO_RULE" > "$tmp"
-  visudo -cqf "$tmp"
+  visudo -cqf "$tmp" >/dev/null # some versions print "parsed OK" despite -q
   install -o root -g root -m 0440 "$tmp" "$SUDOERS"
   rm -f "$tmp"
 fi
