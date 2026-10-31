@@ -13,6 +13,8 @@ Environment=PVEWARDEN_CONFIG=/etc/pvewarden/config.toml
 ExecStart=/opt/pvewarden/venv/bin/pvewarden serve --http
 Restart=on-failure
 RestartSec=10
+# the server itself gives open client streams 5 s; never let a stop hang for systemd's 90 s
+TimeoutStopSec=15
 
 # hardening: the service can only write its state directory
 NoNewPrivileges=yes

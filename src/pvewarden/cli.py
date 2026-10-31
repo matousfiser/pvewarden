@@ -31,6 +31,9 @@ def serve(args: argparse.Namespace) -> None:
         port=cfg.http.port,
         ssl_certfile=cfg.http.tls_cert,
         ssl_keyfile=cfg.http.tls_key,
+        # MCP clients keep a stream open for as long as they run; without a limit a graceful
+        # shutdown waits for them forever and systemd kills the service only after 90 s
+        timeout_graceful_shutdown=5,
     )
 
 
