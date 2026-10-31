@@ -125,7 +125,8 @@ def create_server(app: App) -> MCPServer:
         description=(
             f"Roll a guest back to a pvewarden snapshot and start it (requires tag '{upd}'). DISCARDS ALL "
             "CHANGES made since the snapshot, including application data. Use only when the user "
-            "explicitly asks for it."
+            "explicitly asks for it. If the guest had to be started, waits until it answers again "
+            "(back_online), like reboot_guest."
             + (" pvewarden asks the user to confirm in the client; if they decline, nothing changes." if asks else "")
         ),
     )
