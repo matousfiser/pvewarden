@@ -13,6 +13,7 @@ SVC_USER=pvewarden
 
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 
+echo "    apt: installing python3-venv, openssh-client, openssl"
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv openssh-client openssl ca-certificates
 
@@ -23,6 +24,7 @@ install -d -o "$SVC_USER" -g "$SVC_USER" -m 0700 "$STATE"
 
 # code: root-owned venv, read-only for the service; dependencies pinned by requirements.lock
 [ -d "$APP/venv" ] || python3 -m venv "$APP/venv"
+echo "    pip: installing pvewarden and its pinned dependencies (the slowest step)"
 "$APP/venv/bin/pip" install -q --upgrade pip
 "$APP/venv/bin/pip" install -q -r "$SRC/requirements.lock"
 "$APP/venv/bin/pip" install -q --no-deps --force-reinstall "$SRC"

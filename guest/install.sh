@@ -84,7 +84,7 @@ missing=() INSTALLED_UU=0
 command -v unattended-upgrade >/dev/null || { missing+=(unattended-upgrades); INSTALLED_UU=1; }
 command -v visudo >/dev/null || missing+=(sudo)
 if [ ${#missing[@]} -gt 0 ]; then
-  say "apt-get install ${missing[*]}"
+  say "apt-get install ${missing[*]} (can take a minute)"
   if real; then
     if ! { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${missing[@]}"; }; then
       echo "cannot install ${missing[*]}: does this guest have network and DNS? try 'apt-get update' in it" >&2

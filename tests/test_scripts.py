@@ -141,11 +141,12 @@ esac
     write_exe(bin_dir / "pvesh", """echo '{"members":[{"vmid":201},{"vmid":202},{"storage":"local"}]}'\n""")
     write_exe(bin_dir / "pveum", 'echo "PVEUM $*"\n')
 
-    def run(*args):
+    def run(*args, **extra_env):
         env = {
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "PVE_ETC": str(pve),
             "PVEWARDEN_ENROLL_CONF": str(conf),
+            **extra_env,
         }
         return subprocess.run([proj / "proxmox/pvewarden-enroll", *args], env=env, capture_output=True, text=True)
 
@@ -196,3 +197,10 @@ def test_enroll_all_and_uninstall(enroll):
 def test_enroll_usage(enroll):
     assert enroll().returncode == 2
     assert enroll("--bogus").returncode == 2
+
+
+def test_enroll_shows_signs_of_life_during_a_slow_guest(enroll, tmp_path):
+    write_exe(tmp_path / "proj/guest/install.sh", 'sleep 2.5; echo "INSTALL $*"\n')
+    r = enroll("201", PVEWARDEN_TICK="1")
+    assert r.returncode == 0, r.stderr
+    assert "... still working (1s)" in r.stderr and "... still working (2s)" in r.stderr
