@@ -103,7 +103,8 @@ def create_server(app: App) -> MCPServer:
             "mode='all' also regular updates. Third-party repositories and held packages are never "
             "installed; updates that would need them are skipped. No release upgrades. May auto-remove "
             "unused old kernels. Takes a snapshot first by default and aborts if that fails. Does not "
-            "reboot. Report 'newly_failed_services' if not empty. Full output is in the file in 'log'."
+            "reboot. Report 'newly_failed_services' if not empty. Full output is in the file in 'log', a path "
+            "on the pvewarden server (its container), not on the Proxmox host or the guest."
         ),
     )
     async def apply_updates(vmid: int, mode: Literal["security", "all"] = "security", snapshot: bool = True) -> dict:
