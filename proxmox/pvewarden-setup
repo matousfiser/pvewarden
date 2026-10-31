@@ -197,6 +197,13 @@ default_gw() { ip -4 route show default 2>/dev/null | awk '{print $3; exit}'; }
 
 fetch_source() {
   SRC_TAR=$WORK/pvewarden.tar.gz
+  local here
+  here=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+  if [ -z "$SOURCE" ] && [ -d "$here/.git" ] && [ -f "$here/pyproject.toml" ]; then
+    # run from a git checkout: install exactly that code, not a release
+    SOURCE=$here
+    info "using the source tree this script runs from: $SOURCE"
+  fi
   if [ -n "$SOURCE" ] && [ -d "$SOURCE" ]; then
     tar -C "$SOURCE" -czf "$SRC_TAR" --exclude .git --exclude .venv --exclude '__pycache__' --exclude config.toml .
   elif [ -n "$SOURCE" ]; then
@@ -204,7 +211,8 @@ fetch_source() {
   else
     local url="https://github.com/$REPO/releases/download/v$VERSION/pvewarden-$VERSION.tar.gz"
     info "downloading $url"
-    curl -fsSL "$url" -o "$SRC_TAR" || die "download failed: $url"
+    curl -fsSL "$url" -o "$SRC_TAR" ||
+      die "download failed: $url (is there a v$VERSION release? to install from a checkout: --source DIR)"
     curl -fsSL "$url.sha256" -o "$SRC_TAR.sha256" || die "checksum download failed"
     (cd "$WORK" && sed "s#  .*#  pvewarden.tar.gz#" pvewarden.tar.gz.sha256 | sha256sum -c --quiet) ||
       die "checksum mismatch: refusing to install"
