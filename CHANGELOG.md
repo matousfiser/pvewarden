@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 (2026-11-01)
 
 - `pvewarden-setup`: the install summary, `connect` and `token` output are laid out in clear
   sections that fit 80 columns. Long commands start at the left edge, so they wrap cleanly and copy

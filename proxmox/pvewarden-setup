@@ -14,7 +14,7 @@
 # shellcheck disable=SC2016
 set -euo pipefail
 
-VERSION=0.1.0
+VERSION=0.1.1
 REPO="${PVEWARDEN_REPO:-matousfiser/pvewarden}"
 POOL=pvewarden
 ROLE=Warden
