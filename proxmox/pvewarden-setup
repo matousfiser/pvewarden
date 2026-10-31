@@ -232,10 +232,7 @@ ask_container() {
 
   ask_secret ROOT_PASSWORD "Root password for the container (min. 5 characters).\nEmpty = no password: use SSH keys or 'pct enter $CTID'."
   if [ -n "$ROOT_PASSWORD" ] && [ ${#ROOT_PASSWORD} -lt 5 ]; then die "the password must have at least 5 characters"; fi
-  local default_keys=""
-  [ -s /root/.ssh/authorized_keys ] && default_keys=/root/.ssh/authorized_keys
-  ask SSH_KEYS "SSH public keys for root in the container. One or more of, separated by spaces:\n  gh:USER       keys from github.com/USER.keys\n  gl:USER       keys from gitlab.com/USER.keys\n  https://...   a URL with keys\n  /path/file    a file with keys\nor paste a single key. Empty = none." "$default_keys"
-  collect_ssh_keys "$SSH_KEYS"
+  if [ "$YES" = 1 ]; then collect_ssh_keys "$(env_or SSH_KEYS "")"; else ssh_keys_dialog; fi
 
   pvesh get "/nodes/$NODE/lxc/$CTID/status/current" >/dev/null 2>&1 && die "ID $CTID is already in use"
   return 0
@@ -243,48 +240,114 @@ ask_container() {
 
 is_key() { case "$1" in ssh-* | ecdsa-* | sk-*) return 0 ;; *) return 1 ;; esac; }
 
-# Collect SSH public keys from gh:/gl: users, https URLs, files or a pasted key into one file.
-# Every line must be a valid public key; fingerprints are shown in the summary before anything
-# is created, because these keys get root in the container.
-collect_ssh_keys() {
-  SSH_KEYS_FILE="" SSH_KEYS_SUMMARY="none"
-  [ -n "$1" ] || return 0
-  local out=$WORK/authorized_keys src url
-  : > "$out"
-  if is_key "$1"; then
-    printf '%s\n' "$1" > "$out"
+# SSH public keys for root in the container. They get root, so every line is validated and the
+# fingerprints are shown before anything is created. Collected into $SSH_KEYS_FILE.
+SSH_KEYS_FILE="" SSH_KEYS_COUNT=0 SSH_KEYS_FROM="" SSH_KEYS_FPS="" KEY_ERROR=""
+
+# add_keys SOURCE: gh:USER, gl:USER, https://URL, a file, or one pasted key. 1 + $KEY_ERROR on failure.
+add_keys() {
+  local src=$1 url="" new=$WORK/new_keys line fps="" n=0
+  KEY_ERROR="" ADDED_FPS=""
+  if is_key "$src"; then
+    printf '%s\n' "$src" > "$new"
   else
-    for src in $1; do
-      case "$src" in
-        gh:*) url="https://github.com/${src#gh:}.keys" ;;
-        gl:*) url="https://gitlab.com/${src#gl:}.keys" ;;
-        https://*) url=$src ;;
-        http://*) die "refusing to fetch SSH keys over plain http: $src" ;;
-        *) url="" ;;
-      esac
-      if [ -n "$url" ]; then
-        curl -fsSL --max-time 20 "$url" > "$WORK/fetched" || die "could not fetch SSH keys from $url"
-        grep -q . "$WORK/fetched" || die "no SSH keys published at $url"
-        cat "$WORK/fetched" >> "$out"
-      elif [ -f "$src" ]; then
-        cat "$src" >> "$out"
-      else
-        die "not a key source (gh:USER, gl:USER, https://..., file, or a pasted key): $src"
-      fi
-    done
+    case "$src" in
+      gh:?*) url="https://github.com/${src#gh:}.keys" ;;
+      gl:?*) url="https://gitlab.com/${src#gl:}.keys" ;;
+      https://*) url=$src ;;
+      http://*) KEY_ERROR="refusing to fetch SSH keys over plain http: $src"; return 1 ;;
+    esac
+    if [ -n "$url" ]; then
+      curl -fsSL --max-time 20 "$url" > "$new" 2>/dev/null || { KEY_ERROR="could not fetch SSH keys from $url"; return 1; }
+    elif [ -f "$src" ]; then
+      cat "$src" > "$new"
+    else
+      KEY_ERROR="not a key source (gh:USER, gl:USER, https://..., a file, or a pasted key): $src"
+      return 1
+    fi
   fi
-  local line fps="" n=0
   while IFS= read -r line; do
     case "$line" in "" | "#"*) continue ;; esac
-    is_key "$line" || die "not an SSH public key: ${line:0:60}"
+    if ! is_key "$line"; then KEY_ERROR="not an SSH public key: ${line:0:60}"; return 1; fi
     printf '%s\n' "$line" > "$WORK/one.pub"
-    fps+="
-                       $(ssh-keygen -lf "$WORK/one.pub")" || die "invalid SSH public key: ${line:0:60}"
+    fps+="$(ssh-keygen -lf "$WORK/one.pub" 2>/dev/null)"$'\n' || { KEY_ERROR="invalid SSH public key: ${line:0:60}"; return 1; }
     n=$((n + 1))
-  done < "$out"
-  [ "$n" -gt 0 ] || die "no SSH keys found in: $1"
-  SSH_KEYS_FILE=$out
-  SSH_KEYS_SUMMARY="$n key(s) from $1$fps"
+  done < "$new"
+  if [ "$n" = 0 ]; then KEY_ERROR="no SSH public keys found${url:+ at $url}"; return 1; fi
+  SSH_KEYS_FILE=$WORK/authorized_keys
+  grep -v -e '^$' -e '^#' "$new" >> "$SSH_KEYS_FILE"
+  SSH_KEYS_COUNT=$((SSH_KEYS_COUNT + n))
+  is_key "$src" && src="pasted key"
+  SSH_KEYS_FROM+="${SSH_KEYS_FROM:+, }$src"
+  SSH_KEYS_FPS+=$fps
+  ADDED_FPS=$fps
+}
+
+# --yes: PVEWARDEN_SSH_KEYS = sources separated by spaces, or one pasted key
+collect_ssh_keys() {
+  [ -n "$1" ] || return 0
+  if is_key "$1"; then add_keys "$1" || die "$KEY_ERROR"; return 0; fi
+  local src
+  for src in $1; do add_keys "$src" || die "$KEY_ERROR"; done
+}
+
+ssh_keys_summary() {
+  if [ "$SSH_KEYS_COUNT" = 0 ]; then echo "none"; return; fi
+  printf '%s key(s) from %s\n' "$SSH_KEYS_COUNT" "$SSH_KEYS_FROM"
+  printf '%s' "$SSH_KEYS_FPS" | sed 's/^/                       /'
+}
+
+# interactive: one source at a time, each with its own question and the result shown right away
+ssh_keys_dialog() {
+  local choice value prompt default=github status
+  local host_keys=""
+  [ -s /root/.ssh/authorized_keys ] && host_keys=/root/.ssh/authorized_keys
+  while :; do
+    if [ "$SSH_KEYS_COUNT" = 0 ]; then
+      status="No keys added yet."
+    else
+      status="Added so far: $SSH_KEYS_COUNT key(s) from $SSH_KEYS_FROM"
+    fi
+    local items=(
+      github "My GitHub account (keys published at github.com/USER.keys)"
+      gitlab "My GitLab account (keys published at gitlab.com/USER.keys)"
+      paste "Paste a public key (one line, starts with ssh-ed25519 or ssh-rsa)"
+    )
+    [ -n "$host_keys" ] && items+=(host "Keys that may log in to this Proxmox host as root")
+    items+=(file "A file with public keys on this host" url "Another https:// address with keys")
+    if [ "$SSH_KEYS_COUNT" = 0 ]; then
+      items+=("done" "Continue without SSH keys (log in with the password or 'pct enter')")
+    else
+      items+=("done" "Done: use these $SSH_KEYS_COUNT key(s)")
+    fi
+    choice=$(whiptail --title "$TITLE" --default-item "$default" --menu \
+      "Who may log in to the container as root over SSH?\n\n$status\n\nAdd keys from:" 22 82 8 \
+      "${items[@]}" 3>&1 1>&2 2>&3) || die "cancelled"
+    case "$choice" in
+      done) return 0 ;;
+      host) value=$host_keys ;;
+      github | gitlab | paste | file | url)
+        case "$choice" in
+          github) prompt="Your GitHub user name, e.g. octocat\n\nThe public keys published at https://github.com/<name>.keys will be used." ;;
+          gitlab) prompt="Your GitLab user name, e.g. alice\n\nThe public keys published at https://gitlab.com/<name>.keys will be used." ;;
+          paste) prompt="Paste one public key (the content of e.g. ~/.ssh/id_ed25519.pub on your computer):\n\nssh-ed25519 AAAA... you@laptop" ;;
+          file) prompt="Path to a file with public keys on this Proxmox host:" ;;
+          url) prompt="https:// address that returns public keys, one per line:" ;;
+        esac
+        value=$(whiptail --title "$TITLE" --inputbox "$prompt" 14 82 3>&1 1>&2 2>&3) || continue
+        value=$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        [ -n "$value" ] || continue
+        case "$choice" in github) value="gh:$value" ;; gitlab) value="gl:$value" ;; esac
+        ;;
+      *) continue ;;
+    esac
+    if add_keys "$value"; then
+      whiptail --title "$TITLE" --msgbox "Added $(printf '%s' "$ADDED_FPS" | grep -c .) key(s):\n\n$ADDED_FPS\nCompare the fingerprints with your own keys: these keys get root in the container." 18 90
+      default="done"
+    else
+      whiptail --title "$TITLE" --msgbox "$KEY_ERROR\n\nNothing was added. Try again or choose another source." 12 82
+    fi
+  done
 }
 
 ask_access() {
@@ -310,7 +373,7 @@ Container
   network              $BRIDGE${VLAN:+ vlan $VLAN}, IPv4 $IP${GW:+ via $GW}${IP6:+, IPv6 $IP6}
   DNS                  ${NAMESERVER:-as host}${SEARCHDOMAIN:+, search $SEARCHDOMAIN}
   root password        $([ -n "$ROOT_PASSWORD" ] && echo set || echo none)
-  SSH keys             $SSH_KEYS_SUMMARY
+  SSH keys             $(ssh_keys_summary)
   start on boot        $([ "$ONBOOT" = 1 ] && echo yes || echo no)
 Server
   agents connect via   $([ "$USE_TLS" = yes ] && echo https || echo http)://${LISTEN:-<container IP>}:8765/mcp
