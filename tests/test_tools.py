@@ -1,10 +1,12 @@
 """Tools as the agent sees them: through a real MCP client connected in memory."""
 
 import json
+from dataclasses import replace
 
 import pytest
 from conftest import UPD
 from mcp import Client
+from mcp_types import ElicitResult
 
 from pvewarden.tools import create_server
 
@@ -65,3 +67,82 @@ async def test_instructions_mention_static_mode(app, static):
         app.pve = None
     server = create_server(app)
     assert ("static inventory" in server.instructions) is static
+
+
+# --- confirmation of destructive actions (MCP elicitation) -------------------------------------
+
+SNAP = "pvewarden_20261031_001243"
+
+
+def answer(confirmed: bool | None):
+    """A client that answers every elicitation: True/False = ticked or not, None = user cancelled."""
+    asked = []
+
+    async def callback(context, params):
+        asked.append(params.message)
+        if confirmed is None:
+            return ElicitResult(action="cancel")
+        return ElicitResult(action="accept", content={"confirm": confirmed})
+
+    return callback, asked
+
+
+@pytest.fixture
+def snap_app(app):
+    app.pve.snaps[101] = [{"name": SNAP, "description": "before security updates", "snaptime": 1_790_000_000}]
+    return app
+
+
+@pytest.mark.parametrize("mode", ["legacy", "2026-07-28"])
+async def test_rollback_asks_the_user_and_runs_after_yes(snap_app, mode):
+    callback, asked = answer(True)
+    async with Client(create_server(snap_app), mode=mode, elicitation_callback=callback) as client:
+        res = await client.call_tool("rollback_snapshot", {"vmid": 101, "snapshot": SNAP})
+    assert not res.is_error, text(res)
+    assert len(asked) == 1 and SNAP in asked[0] and "web" in asked[0] and "before security updates" in asked[0]
+    assert [e[0] for e in snap_app.pve.events] == ["rollback", "start"]
+
+
+@pytest.mark.parametrize("mode", ["legacy", "2026-07-28"])
+@pytest.mark.parametrize("confirmed", [False, None])
+async def test_rollback_declined_changes_nothing(snap_app, mode, confirmed):
+    callback, asked = answer(confirmed)
+    async with Client(create_server(snap_app), mode=mode, elicitation_callback=callback) as client:
+        res = await client.call_tool("rollback_snapshot", {"vmid": 101, "snapshot": SNAP})
+    assert res.is_error and "did not confirm" in text(res)
+    assert asked and snap_app.pve.events == []
+
+
+async def test_rollback_refused_when_the_client_cannot_ask(snap_app):
+    async with Client(create_server(snap_app)) as client:  # no elicitation support
+        res = await client.call_tool("rollback_snapshot", {"vmid": 101, "snapshot": SNAP})
+    assert res.is_error and "cannot ask the user" in text(res)
+    assert snap_app.pve.events == []
+
+
+@pytest.mark.parametrize("setting", ["if-supported", "off"])
+async def test_confirmation_can_be_relaxed(snap_app, setting):
+    snap_app.cfg = replace(snap_app.cfg, policy=replace(snap_app.cfg.policy, confirm_destructive=setting))
+    async with Client(create_server(snap_app)) as client:
+        res = await client.call_tool("rollback_snapshot", {"vmid": 101, "snapshot": SNAP})
+    assert not res.is_error, text(res)
+    assert [e[0] for e in snap_app.pve.events] == ["rollback", "start"]
+
+
+async def test_policy_errors_come_before_the_question(snap_app):
+    callback, asked = answer(True)
+    async with Client(create_server(snap_app), elicitation_callback=callback) as client:
+        res = await client.call_tool("rollback_snapshot", {"vmid": 103, "snapshot": SNAP})  # untagged guest
+    assert res.is_error and "pvewarden-update" in text(res)
+    assert asked == []  # the user is not asked to confirm something that would be refused anyway
+
+
+@pytest.mark.parametrize("mode", ["legacy", "2026-07-28"])
+async def test_delete_old_snapshots_lists_what_it_deletes_and_asks(snap_app, mode):
+    callback, asked = answer(False)
+    async with Client(create_server(snap_app), mode=mode, elicitation_callback=callback) as client:
+        res = await client.call_tool("delete_old_snapshots", {"older_than_days": 0})
+        assert res.is_error and SNAP in asked[0]
+        assert len(snap_app.pve.snaps[101]) == 1
+        nothing = await client.call_tool("delete_old_snapshots", {"older_than_days": 99999})
+    assert not nothing.is_error and len(asked) == 1  # nothing to delete: no question

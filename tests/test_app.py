@@ -155,6 +155,10 @@ async def test_reboot_gives_up(app):
 async def test_rollback_only_own_snapshots_and_starts_guest(app):
     with pytest.raises(PolicyError):
         await app.rollback(101, "manual-before-upgrade")
+    with pytest.raises(NotFoundError):
+        await app.rollback(101, SNAPSHOT_PREFIX + "20260101_000000")
+    assert app.pve.events == []
+    app.pve.snaps[101] = [{"name": SNAPSHOT_PREFIX + "20260101_000000", "snaptime": 1_767_225_600}]
     res = await app.rollback(101, SNAPSHOT_PREFIX + "20260101_000000")
     assert res["started_after_rollback"] is True
     assert [e[0] for e in app.pve.events] == ["rollback", "start"]

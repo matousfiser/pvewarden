@@ -18,6 +18,7 @@ def test_minimal_static_config_defaults():
     assert cfg.ssh.user == "pvewarden"
     assert cfg.policy.tag_update == "pvewarden-update"
     assert cfg.policy.tag_reboot == "pvewarden-reboot"
+    assert cfg.policy.confirm_destructive == "required"
     assert cfg.static_guests[0].type == "qemu"
 
 
@@ -34,6 +35,7 @@ def test_needs_proxmox_or_static_guests():
         ({"static_guests": [{"vmid": 1, "name": "a", "address": "x"}]}, r"\[ssh\]: missing keys"),
         (minimal(ssh={"key": "/k", "subnets": ["not-a-net"]}), "subnets"),
         (minimal(static_guests=[{"vmid": 1, "name": "a", "address": "x", "tag": []}]), "static_guests"),
+        (minimal(policy={"confirm_destructive": "yes"}), "confirm_destructive"),
     ],
 )
 def test_rejects_invalid(data, message):

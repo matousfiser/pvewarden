@@ -2,12 +2,14 @@
 
 from typing import Literal
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
+from mcp_types import InputRequiredResult
 
 from pvewarden import __version__
 from pvewarden.app import App
+from pvewarden.confirm import confirm
 from pvewarden.errors import WardenError
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True)
@@ -25,6 +27,8 @@ async def expose(awaitable):
 
 def create_server(app: App) -> MCPServer:
     upd, rbt = app.cfg.policy.tag_update, app.cfg.policy.tag_reboot
+    confirm_mode = app.cfg.policy.confirm_destructive
+    asks = confirm_mode != "off"
     instructions = (
         "Patch management for Linux guests on Proxmox VE. Typical flow: check_updates -> apply_updates "
         "(snapshots first) -> reboot_guest if reboot_required -> report. "
@@ -32,6 +36,11 @@ def create_server(app: App) -> MCPServer:
         f"'{rbt}' allows reboots; guests without tags are read-only. If a tool refuses, report it to the "
         "user instead of looking for a workaround. Never roll back unless the user explicitly asks."
     )
+    if asks:
+        instructions += (
+            " Rollback and snapshot deletion are confirmed by the user in a dialog that pvewarden opens in "
+            "the client; if the user declines, report that and do not retry."
+        )
     if app.pve is None:
         instructions += (
             " Proxmox API is not connected (static inventory): snapshots, reboots and rollbacks are "
@@ -114,9 +123,20 @@ def create_server(app: App) -> MCPServer:
             f"Roll a guest back to a pvewarden snapshot and start it (requires tag '{upd}'). DISCARDS ALL "
             "CHANGES made since the snapshot, including application data. Use only when the user "
             "explicitly asks for it."
+            + (" pvewarden asks the user to confirm in the client; if they decline, nothing changes." if asks else "")
         ),
     )
-    async def rollback_snapshot(vmid: int, snapshot: str) -> dict:
+    async def rollback_snapshot(vmid: int, snapshot: str, ctx: Context) -> dict | InputRequiredResult:
+        plan = await expose(app.rollback_plan(vmid, snapshot))
+        created = (plan["created"] or "?")[:16].replace("T", " ")
+        message = (
+            f"Roll back {plan['name']} (VMID {vmid}) to snapshot {snapshot}, taken {created} UTC"
+            + (f" ({plan['description']})" if plan["description"] else "")
+            + "? Everything written on the guest since then is lost."
+        )
+        asked = await expose(confirm(ctx, confirm_mode, message, f"rollback:{vmid}:{snapshot}"))
+        if asked is not None:
+            return asked
         return await expose(app.rollback(vmid, snapshot))
 
     @mcp.tool(
@@ -124,9 +144,22 @@ def create_server(app: App) -> MCPServer:
         description=(
             "Delete pvewarden snapshots older than N days; other snapshots are never touched. "
             f"Without vmid, cleans all guests tagged '{upd}'."
+            + (" pvewarden asks the user to confirm in the client; if they decline, nothing changes." if asks else "")
         ),
     )
-    async def delete_old_snapshots(older_than_days: int = 7, vmid: int | None = None) -> list[dict]:
+    async def delete_old_snapshots(
+        ctx: Context, older_than_days: int = 7, vmid: int | None = None
+    ) -> list[dict] | InputRequiredResult:
+        doomed = await expose(app.old_snapshots(older_than_days, vmid))
+        if not doomed:
+            return []
+        listing = ", ".join(f"{d['name']}: {d['snapshot']}" for d in doomed[:10])
+        more = f" and {len(doomed) - 10} more" if len(doomed) > 10 else ""
+        message = f"Delete {len(doomed)} pvewarden snapshot(s) older than {older_than_days} days? {listing}{more}"
+        state = f"delete:{older_than_days}:{vmid}:" + ",".join(f"{d['vmid']}/{d['snapshot']}" for d in doomed)
+        asked = await expose(confirm(ctx, confirm_mode, message, state))
+        if asked is not None:
+            return asked
         return await expose(app.delete_old_snapshots(older_than_days, vmid))
 
     return mcp

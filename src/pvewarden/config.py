@@ -33,10 +33,16 @@ class SSHConfig:
     connect_timeout: int = 10
 
 
+CONFIRM_MODES = ("required", "if-supported", "off")
+
+
 @dataclass(frozen=True)
 class PolicyConfig:
     tag_update: str = "pvewarden-update"
     tag_reboot: str = "pvewarden-reboot"
+    # rollback and snapshot deletion: "required" = the user must confirm in the MCP client (refused if
+    # the client cannot ask), "if-supported" = ask when the client can, "off" = never ask
+    confirm_destructive: str = "required"
 
 
 @dataclass(frozen=True)
@@ -120,8 +126,10 @@ def parse(data: dict) -> Config:
         connect_timeout=int(s.get("connect_timeout", 10)),
     )
 
-    pol = _section(data, "policy", {"tag_update", "tag_reboot"})
+    pol = _section(data, "policy", {"tag_update", "tag_reboot", "confirm_destructive"})
     policy = PolicyConfig(**pol)
+    if policy.confirm_destructive not in CONFIRM_MODES:
+        raise ConfigError(f"[policy] confirm_destructive must be one of {', '.join(CONFIRM_MODES)}")
 
     http = None
     if "http" in data:

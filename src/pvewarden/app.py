@@ -227,11 +227,20 @@ class App:
             for s in await self.require_proxmox().snapshots(g)
         ]
 
-    async def rollback(self, vmid: int, snapshot: str) -> dict:
+    async def rollback_plan(self, vmid: int, snapshot: str) -> dict:
+        """Check a rollback is allowed and the snapshot exists, without changing anything."""
         g = await self.guest(vmid)
         self.require(g, self.cfg.policy.tag_update)
         if not snapshot.startswith(SNAPSHOT_PREFIX):
             raise PolicyError("only snapshots created by pvewarden can be rolled back")
+        found = next((s for s in await self.list_snapshots(vmid) if s["name"] == snapshot), None)
+        if found is None:
+            raise NotFoundError(f"guest {vmid} has no snapshot {snapshot!r}")
+        return {"vmid": vmid, "name": g.name, **{k: found[k] for k in ("description", "created")}, "snapshot": snapshot}
+
+    async def rollback(self, vmid: int, snapshot: str) -> dict:
+        await self.rollback_plan(vmid, snapshot)
+        g = await self.guest(vmid)
         pve = self.require_proxmox()
         await pve.rollback(g, snapshot)
         started = False
@@ -241,7 +250,8 @@ class App:
         self.audit.write("rollback", vmid=vmid, snapshot=snapshot)
         return {"vmid": vmid, "name": g.name, "rolled_back_to": snapshot, "started_after_rollback": started}
 
-    async def delete_old_snapshots(self, older_than_days: int = 7, vmid: int | None = None) -> list[dict]:
+    async def old_snapshots(self, older_than_days: int = 7, vmid: int | None = None) -> list[dict]:
+        """pvewarden snapshots older than N days that delete_old_snapshots would remove."""
         pve = self.require_proxmox()
         if vmid is not None:
             g = await self.guest(vmid)
@@ -250,12 +260,20 @@ class App:
         else:
             targets = [g for g in (await self.guests()).values() if self.cfg.policy.tag_update in g.tags]
         cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
-        deleted = []
+        out = []
         for g in targets:
             for s in await pve.snapshots(g):
                 taken = datetime.fromtimestamp(s.get("snaptime", 0), UTC)
                 if s["name"].startswith(SNAPSHOT_PREFIX) and taken < cutoff:
-                    await pve.delete_snapshot(g, s["name"])
-                    deleted.append({"vmid": g.vmid, "snapshot": s["name"]})
+                    out.append({"vmid": g.vmid, "name": g.name, "snapshot": s["name"], "created": taken.isoformat()})
+        return out
+
+    async def delete_old_snapshots(self, older_than_days: int = 7, vmid: int | None = None) -> list[dict]:
+        pve = self.require_proxmox()
+        guests = await self.guests()
+        deleted = []
+        for item in await self.old_snapshots(older_than_days, vmid):
+            await pve.delete_snapshot(guests[item["vmid"]], item["snapshot"])
+            deleted.append({"vmid": item["vmid"], "snapshot": item["snapshot"]})
         self.audit.write("delete_old_snapshots", older_than_days=older_than_days, deleted=deleted)
         return deleted
