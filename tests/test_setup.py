@@ -234,12 +234,13 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
     assert "runuser -u pvewarden -- pvewarden" not in script
 
     # the summary: generic MCP connection data, then numbered steps
-    assert "URL      https://192.0.2.50:8765/mcp" in r.stdout
-    assert f"Header   Authorization: Bearer {agent_token}" in r.stdout
+    assert "MCP server https://192.0.2.50:8765/mcp" in r.stdout
+    assert f"Header     Authorization: Bearer {agent_token}" in r.stdout
     assert "curl.exe -sk https://192.0.2.50:8765/ca.pem" in r.stdout
     ca_hash = hashlib.sha256((host.path / "pve/pve-root-ca.pem").read_bytes()).hexdigest()
     assert ca_hash in r.stdout  # the fingerprint the paste-ready commands check
-    assert "3) Restart the agent" in r.stdout and "Checks     all OK" in r.stdout
+    assert "3. Restart the agent" in r.stdout and "Checks     all OK" in r.stdout
+    assert "\x1b[" not in r.stdout  # no colors when the output is not a terminal
     assert 'tls_ca = "/etc/pvewarden/tls-ca.pem"' in config
 
     # the TLS certificate: signed by the Proxmox CA, for the server's address, key made in the container
@@ -606,7 +607,7 @@ def test_interactive_install_enrolls_before_check_and_summary(host):
     assert r.returncode == 0, r.stdout + r.stderr
     # install put the real pvewarden-enroll in place; it runs against the stub pct
     assert r.stdout.index("=== 101") < r.stdout.index("checking the setup (pvewarden doctor)")
-    assert r.stdout.rstrip().endswith("=" * 80)  # the summary is the last thing on screen
+    assert r.stdout.rstrip().endswith("=" * 78)  # the summary is the last thing on screen
 
 
 def test_cancelled_enroll_does_not_abort_the_install(host):
@@ -643,7 +644,7 @@ def test_renew_cert_refuses_plain_http(host):
 
 def linux_trust_command(stdout: str) -> str:
     lines = stdout.splitlines()
-    return lines[lines.index("      Linux / macOS:") + 1].strip()
+    return lines[lines.index(" Linux / macOS:") + 2]  # after the label and an empty line
 
 
 @pytest.mark.parametrize("tampered", [False, True])
@@ -685,7 +686,7 @@ def test_connect_repeats_the_steps_without_the_token(host):
     (host.pushed / "_etc_pvewarden_tls-ca.pem").write_bytes((host.path / "pve/pve-root-ca.pem").read_bytes())
     r = host.run("connect")
     assert r.returncode == 0, r.stderr
-    assert "URL      https://192.0.2.50:8765/mcp" in r.stdout and "<token:" in r.stdout
+    assert "MCP server https://192.0.2.50:8765/mcp" in r.stdout and "<token:" in r.stdout
     assert hashlib.sha256((host.path / "pve/pve-root-ca.pem").read_bytes()).hexdigest() in r.stdout
 
 

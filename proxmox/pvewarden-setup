@@ -56,6 +56,30 @@ die() {
   exit 1
 }
 info() { echo ">>> $*"; }
+
+# Colors only on a terminal (https://no-color.org). Plain SGR codes: Windows conhost (cmd, ssh)
+# shows them too. Commands meant for copying stay uncolored.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+  C_HEAD=$'\e[1;36m' C_BOLD=$'\e[1m' C_OK=$'\e[1;32m' C_BAD=$'\e[1;31m' C_KEY=$'\e[1;33m' C_OFF=$'\e[0m'
+else
+  C_HEAD="" C_BOLD="" C_OK="" C_BAD="" C_KEY="" C_OFF=""
+fi
+WIDTH=78 # summaries fit an 80-column terminal; long commands start at column 0 and wrap cleanly
+line() { printf '%s%s%s\n' "$C_HEAD" "$(printf "%${WIDTH}s" "" | tr ' ' "${1:-=}")" "$C_OFF"; }
+# section TITLE: "--- TITLE -----", with an empty line around it
+section() {
+  local t="--- $1 "
+  printf '\n%s%s%s%s\n\n' "$C_HEAD" "$t" "$(printf "%$((WIDTH - ${#t}))s" "" | tr ' ' -)" "$C_OFF"
+}
+# banner TEXT: a headline between two double lines
+banner() {
+  echo
+  line '='
+  printf ' %s\n' "$1"
+  line '='
+}
+# field LABEL VALUE: one aligned "label  value" row
+field() { printf ' %s%-10s%s %s\n' "$C_BOLD" "$1" "$C_OFF" "$2"; }
 # run CMD...: execute, or only print in --dry-run mode
 run() {
   if [ "$DRY_RUN" = 1 ]; then
@@ -677,47 +701,46 @@ ca_hash() { pct exec "$CTID" -- cat "$CT_ETC/tls-ca.pem" 2>/dev/null | sha256sum
 # and point NODE_EXTRA_CA_CERTS at it. -k is fine: the fingerprint check is what makes it safe.
 # They leave a NODE_EXTRA_CA_CERTS alone that points to some other file.
 trust_commands() {
+  printf ' %sPowerShell%s (in cmd, type powershell first):\n\n' "$C_BOLD" "$C_OFF"
   sed "s|@URL@|$1/ca.pem|g; s|@HASH@|$2|g" <<'EOF'
-      PowerShell:
-        $p="$HOME\pvewarden-ca.pem"; curl.exe -sk @URL@ -o $p; if (-not (Test-Path $p)) { "cannot reach @URL@" } elseif ((Get-FileHash $p).Hash -ne "@HASH@") { Remove-Item $p; "WRONG CERTIFICATE - not trusted" } elseif ($env:NODE_EXTRA_CA_CERTS -and -not (Split-Path -Leaf $env:NODE_EXTRA_CA_CERTS).StartsWith("pvewarden")) { "NODE_EXTRA_CA_CERTS is in use: add $p to $env:NODE_EXTRA_CA_CERTS" } else { setx NODE_EXTRA_CA_CERTS $p; "OK - open a new terminal" }
-      Linux / macOS:
-        p=~/pvewarden-ca.pem; curl -fsk @URL@ -o "$p" || echo "cannot reach @URL@"; if [ "$(openssl dgst -sha256 -r "$p" 2>/dev/null | cut -c1-64)" != "@HASH@" ]; then rm -f "$p"; echo "WRONG CERTIFICATE - not trusted"; elif [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ "${NODE_EXTRA_CA_CERTS##*/pvewarden}" = "$NODE_EXTRA_CA_CERTS" ]; then echo "NODE_EXTRA_CA_CERTS is in use: add $p to $NODE_EXTRA_CA_CERTS"; else for f in ~/.bashrc ~/.zshrc; do [ -f "$f" ] && ! grep -qs "NODE_EXTRA_CA_CERTS=$p" "$f" && echo "export NODE_EXTRA_CA_CERTS=$p" >> "$f"; done; echo "OK - open a new terminal"; fi
+$p="$HOME\pvewarden-ca.pem"; curl.exe -sk @URL@ -o $p; if (-not (Test-Path $p)) { "cannot reach @URL@" } elseif ((Get-FileHash $p).Hash -ne "@HASH@") { Remove-Item $p; "WRONG CERTIFICATE - not trusted" } elseif ($env:NODE_EXTRA_CA_CERTS -and -not (Split-Path -Leaf $env:NODE_EXTRA_CA_CERTS).StartsWith("pvewarden")) { "NODE_EXTRA_CA_CERTS is in use: add $p to $env:NODE_EXTRA_CA_CERTS" } else { setx NODE_EXTRA_CA_CERTS $p; "OK - open a new terminal" }
+EOF
+  printf '\n %sLinux / macOS:%s\n\n' "$C_BOLD" "$C_OFF"
+  sed "s|@URL@|$1/ca.pem|g; s|@HASH@|$2|g" <<'EOF'
+p=~/pvewarden-ca.pem; curl -fsk @URL@ -o "$p" || echo "cannot reach @URL@"; if [ "$(openssl dgst -sha256 -r "$p" 2>/dev/null | cut -c1-64)" != "@HASH@" ]; then rm -f "$p"; echo "WRONG CERTIFICATE - not trusted"; elif [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ "${NODE_EXTRA_CA_CERTS##*/pvewarden}" = "$NODE_EXTRA_CA_CERTS" ]; then echo "NODE_EXTRA_CA_CERTS is in use: add $p to $NODE_EXTRA_CA_CERTS"; else for f in ~/.bashrc ~/.zshrc; do [ -f "$f" ] && ! grep -qs "NODE_EXTRA_CA_CERTS=$p" "$f" && echo "export NODE_EXTRA_CA_CERTS=$p" >> "$f"; done; echo "OK - open a new terminal"; fi
 EOF
 }
 
-# connect_steps URL TOKEN: how to connect any MCP client (agent); TOKEN may be a placeholder
+# connection_fields URL TOKEN: what any MCP client needs; TOKEN may be a placeholder
+connection_fields() {
+  field "MCP server" "$1"
+  field "Header" "Authorization: Bearer $2"
+}
+
+# connect_steps URL TOKEN: numbered steps to connect an agent; TOKEN may be a placeholder
 connect_steps() {
-  local url=$1 token=$2 base=${1%/mcp} hash
-  cat <<EOF
- Connect an AI agent. pvewarden is a remote MCP server (streamable HTTP):
-   URL      $url
-   Header   Authorization: Bearer $token
-
-EOF
+  local url=$1 token=$2
   if [ "${url%%:*}" = https ]; then
-    hash=$(ca_hash)
-    cat <<EOF
- 1) Trust the server's certificate, once per computer that runs an agent. The command
-    downloads the CA, checks its fingerprint and sets NODE_EXTRA_CA_CERTS (Node-based
-    agents such as Claude Code; other runtimes: docs/clients.md).
-$(trust_commands "$base" "$hash")
-EOF
+    section "1. Trust the server's certificate (once per computer)"
+    echo " Downloads the CA, checks its fingerprint and sets NODE_EXTRA_CA_CERTS for"
+    echo " Node-based agents such as Claude Code. Other runtimes: docs/clients.md"
+    echo
+    trust_commands "${url%/mcp}" "$(ca_hash)"
   else
-    echo " 1) Plain HTTP: nothing to trust. Use it only inside a network you trust (VPN, LAN)."
+    section "1. Plain HTTP: nothing to trust"
+    echo " Use it only inside a network you trust (VPN, LAN)."
   fi
-  cat <<EOF
-
- 2) Add the MCP server to your agent with the URL and header above. Claude Code:
-$(claude_add "$url" "$token")
-    Other agents: their "add MCP server" setting, or the JSON in docs/clients.md.
-
- 3) Restart the agent and ask it: "What updates are pending?"
-EOF
+  section "2. Add the server to Claude Code"
+  claude_add "$url" "$token"
+  echo
+  echo " Other agents: their \"add MCP server\" setting with the address and header"
+  echo " above, or the JSON in docs/clients.md."
+  section "3. Restart the agent and ask: \"What updates are pending?\""
 }
 
 # claude_add URL TOKEN: one line on purpose, it works the same in bash, zsh, cmd and PowerShell
 claude_add() {
-  echo "      claude mcp add --scope user --transport http pvewarden $1 --header \"Authorization: Bearer $2\""
+  echo "claude mcp add --scope user --transport http pvewarden $1 --header \"Authorization: Bearer $2\""
 }
 
 # guests_line: the guests pvewarden manages (members of its pool)
@@ -737,19 +760,22 @@ final_message() {
     printf '(%s) and a one-time agent token.\n' "$url"
     return 0
   fi
-  cat <<EOF
-
-================================================================================
- pvewarden is ready$([ -n "$SETUP_PROBLEMS" ] && printf ', but NOT working yet:\n   %s\n   fix that, then check: pct exec %s -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor' "$SETUP_PROBLEMS" "$CTID")
-
-$(connect_steps "$url" "$AGENT_TOKEN")
-
- Guests     $(guests_line)
- Checks     $([ -n "$SETUP_PROBLEMS" ] && echo "problems, see above" || echo "all OK")
- Token      shown only now; a new one: pvewarden-setup token
- These steps again (without the token): pvewarden-setup connect
-================================================================================
-EOF
+  if [ -n "$SETUP_PROBLEMS" ]; then
+    banner "${C_BAD}pvewarden is installed, but NOT working yet${C_OFF}"
+    echo
+    field "Problem" "$SETUP_PROBLEMS"
+    field "Then" "pct exec $CTID -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor"
+  else
+    banner "${C_OK}pvewarden is ready${C_OFF}"
+  fi
+  echo
+  connection_fields "$url" "$AGENT_TOKEN"
+  field "Guests" "$(guests_line)"
+  field "Checks" "$([ -n "$SETUP_PROBLEMS" ] && echo "${C_BAD}problems, see above${C_OFF}" || echo "${C_OK}all OK${C_OFF}")"
+  connect_steps "$url" "$AGENT_TOKEN"
+  echo " ${C_KEY}The token is shown only now.${C_OFF} A new one: pvewarden-setup token"
+  echo " These steps again, without the token: pvewarden-setup connect"
+  line '='
 }
 
 do_install() {
@@ -929,16 +955,17 @@ do_token() {
   local url kind
   kind=$(tls_kind)
   url="$([ "$kind" = http ] && echo http || echo https)://$LISTEN:8765/mcp"
-  cat <<EOF
-
-================================================================================
- New token for '$client' (shown only now; the old one no longer works).
- Replace it in Claude Code:
-      claude mcp remove --scope user pvewarden
-$(claude_add "$url" "$token")
- then restart claude. Other MCP clients: docs/clients.md
-================================================================================
-EOF
+  banner "${C_OK}New token for '$client'${C_OFF}"
+  echo
+  connection_fields "$url" "$token"
+  echo
+  echo " ${C_KEY}The token is shown only now.${C_OFF} The old one no longer works."
+  section "Replace it in Claude Code, then restart claude"
+  echo "claude mcp remove --scope user pvewarden"
+  claude_add "$url" "$token"
+  echo
+  echo " Other MCP clients: replace the header in their settings (docs/clients.md)."
+  line '='
 }
 
 # ============================================================================================
@@ -968,8 +995,11 @@ do_connect() {
   [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
   local url
   url="$([ "$(tls_kind)" = http ] && echo http || echo https)://$LISTEN:8765/mcp"
+  banner "${C_OK}Connect an AI agent to pvewarden${C_OFF}"
   echo
-  connect_steps "$url" "<token: shown at install, or a new one from pvewarden-setup token>"
+  connection_fields "$url" "<token: shown at install; a new one: pvewarden-setup token>"
+  connect_steps "$url" "<token>"
+  line '='
 }
 
 usage() {
