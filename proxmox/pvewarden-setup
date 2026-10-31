@@ -780,8 +780,10 @@ do_token() {
     return 0
   fi
   # generated inside the container: the token appears only in this output, never in a command line
+  info "Generating a new token in container $CTID ..."
   token=$(pct exec "$CTID" -- /usr/local/bin/pvewarden token "$client" 2>/dev/null) ||
     die "could not set the token (is pvewarden in container $CTID up to date? run: pvewarden-setup upgrade)"
+  info "Restarting the pvewarden service ..."
   pct exec "$CTID" -- systemctl restart pvewarden
   pct exec "$CTID" -- test -f "$CT_ETC/tls.crt" && use_tls=yes
   local url
