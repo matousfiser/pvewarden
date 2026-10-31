@@ -26,7 +26,8 @@ connect_timeout = 10
 [policy]
 tag_update = "pvewarden-update"
 tag_reboot = "pvewarden-reboot"
-# Rollback and snapshot deletion are confirmed by the user in the MCP client, not by the agent:
+# Rollback, snapshot deletion and updates without a snapshot are confirmed by the user in the
+# MCP client, not by the agent:
 #   "required"      ask; refuse if the client cannot ask (no MCP elicitation support)
 #   "if-supported"  ask when the client can, otherwise go ahead
 #   "off"           never ask
