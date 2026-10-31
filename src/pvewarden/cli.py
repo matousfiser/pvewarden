@@ -50,7 +50,7 @@ def doctor(args: argparse.Namespace) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     cfg = load(args.config)
     results = [ok("Config", str(args.config)), *asyncio.run(run_checks(App(cfg)))]
-    print(render(results))
+    print(render(results, verbose=args.verbose))
     if any(r.status == "fail" for r in results):
         sys.exit(1)
 
@@ -81,6 +81,7 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("check-config", help="validate the config file and exit")
     p.set_defaults(func=check_config)
     p = sub.add_parser("doctor", help="check Proxmox access, token privileges and SSH to every guest")
+    p.add_argument("-v", "--verbose", action="store_true", help="also show what each check saw (API data, SSH output)")
     p.set_defaults(func=doctor)
     p = sub.add_parser("token", help="give an HTTP client a new random token (rotation) and print it")
     p.add_argument("name", nargs="?", default="agent", help="client name in [http.clients] (default: agent)")

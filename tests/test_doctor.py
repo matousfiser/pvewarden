@@ -121,3 +121,15 @@ def test_listen_address_must_exist(app):
     assert by_title(check_local(app))["Listen address"].status == "warn"
     app.cfg = replace(app.cfg, http=HTTPConfig(listen="127.0.0.1", clients={"a": "x" * 40}))
     assert "Listen address" not in by_title(check_local(app))
+
+
+async def test_verbose_shows_what_each_check_saw(healthy):
+    healthy.pve.privs["/vms/101"] = FULL - {"VM.Snapshot"}
+    results = await run_checks(healthy)
+    quiet, verbose = render(results), render(results, verbose=True)
+    assert "| " not in quiet
+    assert "| /vms/101: VM.Audit, VM.GuestAgent.Audit, VM.PowerMgmt, VM.Snapshot.Rollback" in verbose
+    assert "| ACL /pool/pvewarden: " in verbose
+    assert "| 101 " in verbose and "tags=" in verbose
+    assert "| ssh pvewarden@192.0.2.11 status -> exit 0" in verbose
+    assert "s3cret" not in verbose and "token_secret" not in verbose  # never the secret
