@@ -534,7 +534,7 @@ final_message() {
   cat <<EOF
 
 ================================================================================
- pvewarden is installed.$([ -n "$SETUP_PROBLEMS" ] && printf '\n\n !!! but it is not working yet: %s\n !!! fix that, then run: pct exec %s -- runuser -u pvewarden -- pvewarden doctor' "$SETUP_PROBLEMS" "$CTID")
+ pvewarden is installed.$([ -n "$SETUP_PROBLEMS" ] && printf '\n\n !!! but it is not working yet: %s\n !!! fix that, then run: pct exec %s -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor' "$SETUP_PROBLEMS" "$CTID")
 
  MCP endpoint   $url
  Agent token    $AGENT_TOKEN
@@ -551,7 +551,7 @@ $([ "$USE_TLS" = yes ] && printf '   (trust the certificate first, e.g. NODE_EXT
 
  Next: let pvewarden manage guests:  pvewarden-setup enroll
    or: pvewarden-enroll --pool --tags $TAG_UPDATE <VMID>
- Check the setup any time:  pct exec $CTID -- runuser -u pvewarden -- pvewarden doctor
+ Check the setup any time:  pct exec $CTID -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor
 ================================================================================
 EOF
 }
