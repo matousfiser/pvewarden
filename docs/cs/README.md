@@ -7,8 +7,8 @@ s Claude Code i s jakýmkoli jiným MCP klientem. Agent zjistí čekající aktu
 aktualizuje, restartuje a zkontroluje služby. Nikdy nedostane shell ani root. Volá jen několik
 nástrojů a co smí, rozhoduje Proxmox a server, ne prompt.
 
-> **Stav:** v0.1 těsně před vydáním. Otestováno na Proxmox VE 9 s hosty Debian 12/13 a Ubuntu
-> 22.04/24.04/26.04, kontejnery i VM.
+> **Stav:** v0.1, první vydání. Otestováno na Proxmox VE 9 s hosty Debian 12/13 a Ubuntu
+> 22.04/24.04/26.04, kontejnery i VM. Zpětná vazba a issues jsou vítané.
 
 Podrobná dokumentace je v angličtině: [README](../../README.md), [instalace](install.md) (česky),
 [připojení klientů](../clients.md), [konfigurace](../configuration.md),

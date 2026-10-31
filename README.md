@@ -7,8 +7,8 @@ or any other MCP client. The agent checks pending updates, takes a snapshot, ins
 verifies services. It never gets a shell or root. It can only call a small set of tools, and Proxmox
 and the server decide what it may do, not the prompt.
 
-> **Status:** v0.1 is close to release. Tested on Proxmox VE 9, with Debian 12/13 and
-> Ubuntu 22.04/24.04/26.04 guests, both containers and VMs.
+> **Status:** v0.1, the first release. Tested on Proxmox VE 9 with Debian 12/13 and Ubuntu
+> 22.04/24.04/26.04 guests, containers and VMs. Feedback and issues are welcome.
 
 [Česky](docs/cs/README.md)
 
@@ -58,6 +58,9 @@ curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pv
 less pvewarden-setup        # it is a readable shell script, worth a look before running it as root
 bash pvewarden-setup
 ```
+
+`pvewarden-setup` checks the checksum of everything it downloads. To check the script itself, compare
+`sha256sum pvewarden-setup` with `SHA256SUMS` on the [release page](https://github.com/matousfiser/pvewarden/releases/latest).
 
 The wizard asks a few questions and then:
 
