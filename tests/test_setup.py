@@ -202,6 +202,8 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
     agent_token = cfg.http.clients["agent"]
     assert agent_token in r.stdout  # the agent token is shown once, at the end
     assert "claude mcp add --transport http pvewarden https://192.0.2.50:8765/mcp" in r.stdout
+    # pct exec has no /usr/local/bin in PATH: printed commands must use the full path
+    assert "-- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor" in r.stdout
 
     enroll_conf = (host.state / "enroll.conf").read_text()
     assert "AAAASERVERKEY" in enroll_conf and "FROM=192.0.2.50" in enroll_conf
