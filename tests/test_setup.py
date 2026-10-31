@@ -321,7 +321,7 @@ def test_ssh_keys_from_github_and_a_file_with_fingerprints_in_the_summary(host, 
     "source, error",
     [
         ("gh:nobody", "could not fetch SSH keys from https://github.com/nobody.keys"),
-        ("gl:empty", "no SSH keys published at https://gitlab.com/empty.keys"),
+        ("gl:empty", "no SSH public keys found at https://gitlab.com/empty.keys"),
         ("https://example.com/garbage", "not an SSH public key: <html>"),
         ("http://example.com/keys", "plain http"),
         ("not-a-file", "not a key source"),
@@ -409,7 +409,7 @@ def test_interactive_advanced_install_uses_every_answer(host, keys):
         "docker0", "20",  # bridge, vlan
         "192.0.2.60/24", "192.0.2.254", "auto", "192.0.2.53", "lan", "0",  # ip, gw, ipv6, dns, search, onboot
         "s3cret-pass", "s3cret-pass",  # root password twice
-        keys["pasted"],  # ssh key
+        "paste", keys["pasted"], "done",  # ssh keys: source menu, the key, finish
         "https", "claude",  # access, agent name
         "yes",  # confirm summary
         "no",  # enroll now?
@@ -459,3 +459,30 @@ def test_upgrade(host):
     assert "ENROLL --all" in calls
     assert not any(c.startswith(("pct create", "pveum user token")) for c in calls)  # keeps the existing token
     assert (host.path / "opt/proxmox/pvewarden-setup").exists()
+
+
+def test_interactive_ssh_keys_one_source_at_a_time_with_errors_shown(host, keys):
+    (host.path / "bin/whiptail").write_text(SCRIPTED_WHIPTAIL)
+    answers = [
+        "default", "192.0.2.50/24", "192.0.2.254",  # mode, ip, gateway
+        "", "",  # no root password
+        "github", "nobody",  # a typo: shown as an error, back to the menu
+        "github", "  alice ",  # the right name (spaces trimmed)
+        "file", str(host.admin_keys),
+        "done",
+        "https", "agent", "yes", "no",
+    ]  # fmt: skip
+    (host.path / "fake/answers").write_text("\n".join(answers) + "\n")
+    r = host.run("install")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (host.path / "fake/answers").read_text() == ""
+    assert (host.path / "fake/ct_authorized_keys").read_text().splitlines() == [
+        keys["alice1"], keys["alice2"], keys["admin"],
+    ]  # fmt: skip
+    dialogs = (host.path / "fake/dialogs.log").read_text()
+    assert "could not fetch SSH keys from https://github.com/nobody.keys" in dialogs
+    assert "Added 2 key(s)" in dialogs and "Added 1 key(s)" in dialogs
+    assert "Added so far: 3 key(s) from gh:alice, " in dialogs
+    summary = dialogs[dialogs.index("  SSH keys   ") + 2 :]  # the confirmation shows every fingerprint
+    assert summary.startswith("SSH keys             3 key(s) from gh:alice")
+    assert summary.count("(ED25519)") == 3
