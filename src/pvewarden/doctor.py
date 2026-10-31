@@ -36,6 +36,7 @@ class Result:
     title: str
     detail: str = ""
     hint: str = ""
+    raw: str = ""  # what the check saw, shown with --verbose
 
 
 def ok(title, detail=""):
@@ -145,6 +146,7 @@ async def _check_proxmox(app: App) -> list[Result]:
                 "set verify_tls to a copy of /etc/pve/pve-root-ca.pem",
             )
         )
+    out[-1].raw = f"token {pve.cfg.token_id}, verify_tls = {pve.cfg.verify_tls!r}"
 
     guests = await pve.guests()
     if not guests:
@@ -159,11 +161,14 @@ async def _check_proxmox(app: App) -> list[Result]:
     upd, rbt = app.cfg.policy.tag_update, app.cfg.policy.tag_reboot
     n_upd = sum(upd in g.tags for g in guests)
     n_rbt = sum(rbt in g.tags for g in guests)
-    out.append(ok("Guests", f"{len(guests)} visible, {n_upd} tagged {upd}, {n_rbt} tagged {rbt}"))
+    result = ok("Guests", f"{len(guests)} visible, {n_upd} tagged {upd}, {n_rbt} tagged {rbt}")
+    result.raw = "\n".join(f"{g.vmid} {g.type} {g.name} {g.status} tags={';'.join(g.tags) or '-'}" for g in guests)
+    out.append(result)
 
-    missing = {}
+    missing, seen = {}, {}
     for g in guests:
         privs = (await pve.permissions(f"/vms/{g.vmid}")).get(f"/vms/{g.vmid}", set())
+        seen[g.vmid] = sorted(privs)
         need = set(REQUIRED_PRIVS)
         lacking = need - privs
         if g.type == "qemu" and not privs & AGENT_PRIVS:
@@ -172,12 +177,18 @@ async def _check_proxmox(app: App) -> list[Result]:
             missing[g.vmid] = sorted(lacking)
     if missing:
         detail = "; ".join(f"{vmid}: {', '.join(p)}" for vmid, p in missing.items())
-        out.append(fail("Token privileges", detail, "update the Warden role (see the installation docs)"))
+        result = fail("Token privileges", detail, "update the Warden role (see the installation docs)")
     else:
-        out.append(ok("Token privileges", "all required privileges present"))
+        result = ok("Token privileges", "all required privileges present")
+    by_acl = await pve.permissions()
+    result.raw = "\n".join(
+        [f"/vms/{vmid}: {', '.join(p) or '(none)'}" for vmid, p in seen.items()]
+        + [f"ACL {path}: {', '.join(sorted(p))}" for path, p in sorted(by_acl.items())]
+    )
+    out.append(result)
 
     extra = set()
-    for privs in (await pve.permissions()).values():
+    for privs in by_acl.values():
         extra |= privs & DANGEROUS_PRIVS
     if extra:
         out.append(
@@ -216,11 +227,14 @@ async def check_guests(app: App) -> list[Result]:
         except Exception as e:
             return fail(title, str(e))
         if rc != 0:
-            return fail(title, f"{address}: {out.strip()[-200:]}", explain_ssh_error(out))
-        os_name = next((line[3:] for line in out.splitlines() if line.startswith("os=")), "?")
-        d = app.describe(g)
-        allowed = [name for name, on in (("update", d["may_update"]), ("reboot", d["may_reboot"])) if on]
-        return ok(title, f"{address}, {os_name}, allowed: {', '.join(allowed) or 'read-only'}")
+            result = fail(title, f"{address}: {out.strip()[-200:]}", explain_ssh_error(out))
+        else:
+            os_name = next((line[3:] for line in out.splitlines() if line.startswith("os=")), "?")
+            d = app.describe(g)
+            allowed = [name for name, on in (("update", d["may_update"]), ("reboot", d["may_reboot"])) if on]
+            result = ok(title, f"{address}, {os_name}, allowed: {', '.join(allowed) or 'read-only'}")
+        result.raw = f"ssh {app.cfg.ssh.user}@{address} status -> exit {rc}\n{out.strip()}"
+        return result
 
     return list(await asyncio.gather(*(one(g) for g in guests)))
 
@@ -235,11 +249,13 @@ async def run_checks(app: App) -> list[Result]:
 MARK = {"ok": "[ OK ]", "warn": "[WARN]", "fail": "[FAIL]"}
 
 
-def render(results: list[Result]) -> str:
+def render(results: list[Result], verbose: bool = False) -> str:
     width = max(len(r.title) for r in results)
     lines = []
     for r in results:
         lines.append(f"{MARK[r.status]} {r.title.ljust(width)}  {r.detail}")
         if r.hint:
             lines.append(f"       {' ' * width}  -> {r.hint}")
+        if verbose and r.raw:
+            lines += [f"       {' ' * width}  | {line}" for line in r.raw.splitlines()]
     return "\n".join(lines)
