@@ -154,7 +154,8 @@ async def _check_proxmox(app: App) -> list[Result]:
             warn(
                 "Guests",
                 "the token sees no guests",
-                "add guests to the pvewarden pool; check the role is granted on /pool/pvewarden",
+                "enroll guests (on the Proxmox host: pvewarden-setup enroll); if you already did, "
+                "check the role is granted on /pool/pvewarden",
             )
         )
         return out
