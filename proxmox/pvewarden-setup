@@ -1,6 +1,6 @@
 #!/bin/bash
 # pvewarden-setup — install, upgrade or remove pvewarden. Run as root on a Proxmox VE host.
-#   pvewarden-setup [install|upgrade|enroll|token|uninstall] [--yes] [--dry-run] [--source DIR|TARBALL]
+#   pvewarden-setup [install|upgrade|enroll|token|renew-cert|uninstall] [--yes] [--dry-run] [--source DIR|TARBALL]
 #     no command      interactive menu
 #     --yes           take defaults / PVEWARDEN_* environment variables instead of asking
 #     --dry-run       show what would be done, change nothing
@@ -65,7 +65,7 @@ run() {
   fi
 }
 
-# slow CMD...: like run, for steps that take a while. Prints a sign of life every 15 s, so a
+# slow CMD...: like run, for steps that take a while. Prints a sign of life every 5 s, so a
 # slow host does not look like a hung script. Via fd 3 (the original stderr): it also shows
 # inside $(...) and when the command's own stderr is redirected.
 exec 3>&2
@@ -75,13 +75,13 @@ slow() {
     run "$@"
     return
   fi
-  local rc=0
+  local rc=0 start=$SECONDS took
   (
     n=0
     # sleep gets no inherited pipes: a killed ticker must not keep a caller waiting for EOF
     # shellcheck disable=SC2217  # stdin closed on purpose, see above
-    while sleep "${PVEWARDEN_TICK:-15}" </dev/null >/dev/null 2>&1 3>&-; do
-      n=$((n + ${PVEWARDEN_TICK:-15}))
+    while sleep "${PVEWARDEN_TICK:-5}" </dev/null >/dev/null 2>&1 3>&-; do
+      n=$((n + ${PVEWARDEN_TICK:-5}))
       echo "    ... still working (${n}s)" >&3
     done
   ) &
@@ -90,6 +90,8 @@ slow() {
   kill "$TICKER" 2>/dev/null || true
   wait "$TICKER" 2>/dev/null || true
   TICKER=""
+  took=$((SECONDS - start))
+  [ "$took" -lt 3 ] || echo "    done (${took}s)" >&3
   return "$rc"
 }
 
@@ -168,7 +170,7 @@ preflight() {
 }
 
 load_state() {
-  CTID="" LISTEN="" CT_IP=""
+  CTID="" LISTEN="" CT_IP="" CT_HOSTNAME=pvewarden
   # shellcheck source=/dev/null
   [ -f "$SETUP_STATE" ] && . "$SETUP_STATE"
   return 0
@@ -177,9 +179,10 @@ load_state() {
 save_state() {
   run mkdir -p "$ETC"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "would write $SETUP_STATE: CTID=$CTID LISTEN=$LISTEN CT_IP=$CT_IP"
+    echo "would write $SETUP_STATE: CTID=$CTID LISTEN=$LISTEN CT_IP=$CT_IP CT_HOSTNAME=$CT_HOSTNAME"
   else
-    printf 'CTID=%q\nLISTEN=%q\nCT_IP=%q\nVERSION=%q\n' "$CTID" "$LISTEN" "$CT_IP" "$VERSION" > "$SETUP_STATE"
+    printf 'CTID=%q\nLISTEN=%q\nCT_IP=%q\nCT_HOSTNAME=%q\nVERSION=%q\n' \
+      "$CTID" "$LISTEN" "$CT_IP" "$CT_HOSTNAME" "$VERSION" > "$SETUP_STATE"
   fi
 }
 
@@ -390,12 +393,12 @@ ssh_keys_dialog() {
 
 ask_access() {
   choose ACCESS "How will agents reach the pvewarden server?" https \
-    https "HTTPS on the container's address (self-signed certificate)" \
+    https "HTTPS on the container's address (certificate signed by the Proxmox CA)" \
     custom "My own address, e.g. a WireGuard/VPN IP I configure in the container myself"
   if [ "$ACCESS" = custom ]; then
     ask LISTEN "Address the server listens on (it must exist in the container before the server starts):" ""
     [ -n "$LISTEN" ] || die "an address is required"
-    choose USE_TLS "Use HTTPS on that address too? (not needed inside an encrypted VPN)" no no "No, plain HTTP" yes "Yes, self-signed certificate"
+    choose USE_TLS "Use HTTPS on that address too? (not needed inside an encrypted VPN)" no no "No, plain HTTP" yes "Yes, certificate signed by the Proxmox CA"
   else
     LISTEN="" USE_TLS=yes
   fi
@@ -583,13 +586,54 @@ EOF
   run pct exec "$CTID" -- chown root:pvewarden "$CT_ETC/config.toml"
   run pct exec "$CTID" -- sh -c "grep -q ' $API_HOST\$' /etc/hosts || echo '$API_IP $API_HOST' >> /etc/hosts"
 
-  if [ "$USE_TLS" = yes ]; then
-    local san="IP:$LISTEN,DNS:$CT_HOSTNAME"
+  [ "$USE_TLS" != yes ] || issue_tls_cert
+}
+
+# The server's TLS certificate, signed by this cluster's Proxmox CA (/etc/pve/pve-root-ca.pem,
+# the CA behind the web UI). A client that trusts that CA once keeps trusting pvewarden across
+# reinstalls and renewed certificates. The private key is made in the container and never
+# leaves it: only a CSR comes out and the signed certificate goes back. Without the CA key
+# (unusual setups): self-signed.
+PVE_CA_KEY=${PVE_CA_KEY:-$PVE_ETC/priv/pve-root-ca.key}
+issue_tls_cert() {
+  local san="IP:$LISTEN,DNS:$CT_HOSTNAME"
+  if [ ! -r "$PVE_CA_KEY" ] && [ "$DRY_RUN" = 0 ]; then
+    info "no Proxmox CA key ($PVE_CA_KEY): creating a self-signed certificate"
     run pct exec "$CTID" -- openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1095 \
       -subj "/CN=$CT_HOSTNAME" -addext "subjectAltName=$san" -keyout "$CT_ETC/tls.key" -out "$CT_ETC/tls.crt"
-    run pct exec "$CTID" -- sh -c "chown root:pvewarden $CT_ETC/tls.key && chmod 0640 $CT_ETC/tls.key && chmod 0644 $CT_ETC/tls.crt"
+  else
+    info "issuing the server's TLS certificate for $LISTEN, signed by the Proxmox CA"
+    run pct exec "$CTID" -- openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+      -subj "/CN=$CT_HOSTNAME" -keyout "$CT_ETC/tls.key" -out /root/pvewarden-tls.csr
+    if [ "$DRY_RUN" = 1 ]; then
+      echo "would sign the request with $PVE_CA_KEY (subjectAltName $san, 825 days)"
+    else
+      pct pull "$CTID" /root/pvewarden-tls.csr "$WORK/tls.csr"
+      printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=%s\n' \
+        "$san" > "$WORK/tls.ext"
+      openssl x509 -req -in "$WORK/tls.csr" -CA "$PVE_ETC/pve-root-ca.pem" -CAkey "$PVE_CA_KEY" \
+        -set_serial "0x$(openssl rand -hex 16)" -days 825 -sha256 -extfile "$WORK/tls.ext" -out "$WORK/tls.crt" 2>/dev/null ||
+        die "signing the certificate with the Proxmox CA failed"
+      ct_push "$WORK/tls.crt" "$CT_ETC/tls.crt" 0644
+      pct exec "$CTID" -- rm -f /root/pvewarden-tls.csr
+    fi
+  fi
+  run pct exec "$CTID" -- sh -c "chown root:pvewarden $CT_ETC/tls.key && chmod 0640 $CT_ETC/tls.key && chmod 0644 $CT_ETC/tls.crt"
+}
+
+# tls_kind: how the installed server is reached: http, pve-ca or self-signed
+tls_kind() {
+  if ! pct exec "$CTID" -- test -f "$CT_ETC/tls.crt"; then
+    echo http
+  elif pct exec "$CTID" -- cat "$CT_ETC/tls.crt" | openssl verify -CAfile "$PVE_ETC/pve-root-ca.pem" >/dev/null 2>&1; then
+    echo pve-ca
+  else
+    echo self-signed
   fi
 }
+
+# the Proxmox host's address, for the scp command clients run
+host_address() { hostname -I 2>/dev/null | awk '{print $1}'; }
 
 SETUP_PROBLEMS=""
 start_server() {
@@ -622,21 +666,48 @@ install_enroll_tool() {
   fi
 }
 
-# client_instructions URL TOKEN USE_TLS: how to connect an MCP client
-client_instructions() {
-  # one line on purpose: works the same in bash, zsh, cmd and PowerShell
-  cat <<EOF
- Claude Code (one command, works in any shell):
-$([ "$3" = yes ] && printf '   Note: the client must trust the certificate first, e.g. NODE_EXTRA_CA_CERTS=./pvewarden.crt\n')
-   claude mcp add --scope user --transport http pvewarden $1 --header "Authorization: Bearer $2"
- Other MCP clients:
-   { "mcpServers": { "pvewarden": { "type": "http", "url": "$1",
-       "headers": { "Authorization": "Bearer $2" } } } }
+# trust_steps KIND: step 1 of connecting a client: make it trust the server's certificate
+trust_steps() {
+  local host
+  host=$(host_address)
+  case "$1" in
+    pve-ca)
+      cat <<EOF
+ 1) Trust the Proxmox CA, once per computer. It signs pvewarden's certificate, so
+    reinstalls and renewed certificates need nothing new. In your home folder:
+      scp root@${host:-<proxmox>}:/etc/pve/pve-root-ca.pem .
+      Windows PowerShell:  setx NODE_EXTRA_CA_CERTS "\$env:USERPROFILE\pve-root-ca.pem"
+                           then open a new terminal
+      Linux / macOS:       echo 'export NODE_EXTRA_CA_CERTS=~/pve-root-ca.pem' >> ~/.bashrc
 EOF
+      ;;
+    self-signed)
+      cat <<EOF
+ 1) Trust the server's self-signed certificate (again after every reinstall):
+      on the Proxmox host:  pct pull $CTID $CT_ETC/tls.crt /root/pvewarden.crt
+      on your computer:     scp root@${host:-<proxmox>}:/root/pvewarden.crt .
+      then point NODE_EXTRA_CA_CERTS at pvewarden.crt (see docs/clients.md)
+EOF
+      ;;
+    http) echo " 1) Plain HTTP: nothing to trust. Use it only inside a network you trust (VPN, LAN)." ;;
+  esac
+}
+
+# claude_add URL TOKEN: one line on purpose, it works the same in bash, zsh, cmd and PowerShell
+claude_add() {
+  echo "      claude mcp add --scope user --transport http pvewarden $1 --header \"Authorization: Bearer $2\""
+}
+
+# guests_line: the guests pvewarden manages (members of its pool)
+guests_line() {
+  local list
+  list=$(pvesh get "/pools/$POOL" --output-format json 2>/dev/null |
+    json 'print join ", ", map { "$_->{vmid}" . ($_->{name} ? " $_->{name}" : "") } grep { defined $_->{vmid} } @{$d->{members}}' 2>/dev/null) || true
+  echo "${list:-none yet: pvewarden-setup enroll}"
 }
 
 final_message() {
-  local scheme url fingerprint=""
+  local scheme url kind
   scheme=$([ "$USE_TLS" = yes ] && echo https || echo http)
   url="$scheme://$LISTEN:8765/mcp"
   if [ "$DRY_RUN" = 1 ]; then
@@ -644,24 +715,24 @@ final_message() {
     printf '(%s) and a one-time agent token.\n' "$url"
     return 0
   fi
-  if [ "$USE_TLS" = yes ]; then
-    fingerprint=$(pct exec "$CTID" -- openssl x509 -in "$CT_ETC/tls.crt" -noout -fingerprint -sha256 | cut -d= -f2)
-  fi
+  kind=$(tls_kind)
   cat <<EOF
 
 ================================================================================
- pvewarden is installed.$([ -n "$SETUP_PROBLEMS" ] && printf '\n\n !!! but it is not working yet: %s\n !!! fix that, then run: pct exec %s -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor' "$SETUP_PROBLEMS" "$CTID")
+ pvewarden is ready$([ -n "$SETUP_PROBLEMS" ] && printf ', but NOT working yet:\n   %s\n   fix that, then check: pct exec %s -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor' "$SETUP_PROBLEMS" "$CTID")
 
- MCP endpoint   $url
- Agent token    $AGENT_TOKEN
-                (shown only now; it is stored in $CT_ETC/config.toml in container $CTID)
-$([ -n "$fingerprint" ] && printf ' TLS cert       self-signed, SHA-256 %s\n                copy it from the container: pct pull %s %s/tls.crt ./pvewarden.crt\n' "$fingerprint" "$CTID" "$CT_ETC")
+$(trust_steps "$kind")
 
-$(client_instructions "$url" "$AGENT_TOKEN" "$USE_TLS")
+ 2) Connect Claude Code (one line, any shell):
+$(claude_add "$url" "$AGENT_TOKEN")
 
- Next: let pvewarden manage guests:  pvewarden-setup enroll
-   or: pvewarden-enroll --pool --tags $TAG_UPDATE <VMID>
- Check the setup any time:  pct exec $CTID -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor
+ 3) Restart claude and ask: "What updates are pending?"
+
+ Endpoint   $url
+ Guests     $(guests_line)
+ Checks     $([ -n "$SETUP_PROBLEMS" ] && echo "problems, see above" || echo "all OK")
+ Token      shown only now; a new one any time: pvewarden-setup token
+ Other MCP clients and agents in containers: docs/clients.md
 ================================================================================
 EOF
 }
@@ -822,7 +893,7 @@ do_uninstall() {
 do_token() {
   load_state
   [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
-  local client token use_tls=no
+  local client token
   ask CLIENT "Which agent gets a new token? (client name in the server config)" agent
   # shellcheck disable=SC2153  # set by ask
   client=$CLIENT
@@ -840,21 +911,37 @@ do_token() {
     die "could not set the token (is pvewarden in container $CTID up to date? run: pvewarden-setup upgrade)"
   info "restarting the pvewarden service"
   slow pct exec "$CTID" -- systemctl restart pvewarden
-  pct exec "$CTID" -- test -f "$CT_ETC/tls.crt" && use_tls=yes
-  local url
-  url="$([ "$use_tls" = yes ] && echo https || echo http)://$LISTEN:8765/mcp"
+  local url kind
+  kind=$(tls_kind)
+  url="$([ "$kind" = http ] && echo http || echo https)://$LISTEN:8765/mcp"
   cat <<EOF
 
 ================================================================================
- New token for '$client' (shown only now; the old one no longer works):
-
-   $token
-
- Replace it in your MCP client. Claude Code:
-   claude mcp remove --scope user pvewarden
-$(client_instructions "$url" "$token" "$use_tls" | sed 1d)
+ New token for '$client' (shown only now; the old one no longer works).
+ Replace it in Claude Code:
+      claude mcp remove --scope user pvewarden
+$(claude_add "$url" "$token")
+ then restart claude. Other MCP clients: docs/clients.md
 ================================================================================
 EOF
+}
+
+# ============================================================================================
+# renew-cert: a new TLS certificate for the server
+# ============================================================================================
+
+do_renew_cert() {
+  load_state
+  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+  pct exec "$CTID" -- test -f "$CT_ETC/tls.crt" || die "this installation uses plain HTTP: there is no certificate"
+  confirm "Issue a new TLS certificate for $LISTEN, signed by the Proxmox CA?\n\nClients that trust the Proxmox CA (pve-root-ca.pem) need nothing new. Clients that trusted the old self-signed certificate must switch to the Proxmox CA." ||
+    die "cancelled"
+  issue_tls_cert
+  info "restarting the pvewarden service"
+  slow pct exec "$CTID" -- systemctl restart pvewarden
+  [ "$DRY_RUN" = 1 ] && return 0
+  printf '\nNew certificate for %s (%s).\n\n' "$LISTEN" "$(tls_kind)"
+  trust_steps "$(tls_kind)"
 }
 
 usage() {
@@ -865,6 +952,7 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     install | upgrade | enroll | token | uninstall) COMMAND=$1 ;;
+    renew-cert) COMMAND=renew_cert ;;
     --yes | -y) YES=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --source)
@@ -887,6 +975,7 @@ if [ -z "$COMMAND" ]; then
     enroll "Let pvewarden manage more guests" \
     upgrade "Upgrade an existing installation" \
     token "Give an agent a new token (the old one stops working)" \
+    renew_cert "New TLS certificate (e.g. after the server's address changed)" \
     uninstall "Remove pvewarden"
 fi
 "do_$COMMAND"

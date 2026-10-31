@@ -134,15 +134,15 @@ else
 fi
 [ "$DRY_RUN" = 1 ] && ARGS=(--dry-run "${ARGS[@]}")
 
-# slow CMD...: prints a sign of life every 15 s while CMD runs (apt in a guest can take minutes)
+# slow CMD...: prints a sign of life every 5 s while CMD runs (apt in a guest can take minutes)
 slow() {
   local rc=0 ticker
   (
     n=0
     # sleep gets no inherited pipes: a killed ticker must not keep a caller waiting for EOF
     # shellcheck disable=SC2217  # stdin closed on purpose, see above
-    while sleep "${PVEWARDEN_TICK:-15}" </dev/null >/dev/null 2>&1 3>&-; do
-      n=$((n + ${PVEWARDEN_TICK:-15}))
+    while sleep "${PVEWARDEN_TICK:-5}" </dev/null >/dev/null 2>&1 3>&-; do
+      n=$((n + ${PVEWARDEN_TICK:-5}))
       echo "    ... still working (${n}s)" >&2
     done
   ) &

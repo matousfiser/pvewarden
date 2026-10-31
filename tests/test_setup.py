@@ -50,6 +50,7 @@ esac
   create) while [ $# -gt 0 ]; do [ "$1" = --ssh-public-keys ] && cp "$2" "$FAKE/ct_authorized_keys"; shift; done ;;
   status) [ -f "$FAKE/ct" ] && echo "status: running" || exit 2 ;;
   push) mkdir -p "$FAKE/pushed"; cp "$3" "$FAKE/pushed/$(echo "$4" | tr / _)" ;;
+  pull) [ "$3" = /root/pvewarden-tls.csr ] && cp "$FAKE/tls.csr" "$4" ;;
   exec)
     shift 3
     case "$*" in
@@ -58,7 +59,8 @@ esac
       *python3*) echo "192.0.2.0/24" ;;
       "cat /etc/pvewarden/id_ed25519.pub") echo "$FAKE_PUBKEY" ;;
       "/usr/local/bin/pvewarden token "*) sleep "${FAKE_DELAY:-0}"; echo "NEW-TOKEN-FOR-${@: -1}"; echo "noise on stderr" >&2 ;;
-      "test -f /etc/pvewarden/tls.crt") true ;;
+      "test -f /etc/pvewarden/tls.crt") [ -z "$FAKE_NO_TLS" ] ;;
+      "cat /etc/pvewarden/tls.crt") cat "$FAKE/pushed/_etc_pvewarden_tls.crt" 2>/dev/null ;;
       *fingerprint*) echo "sha256 Fingerprint=AA:BB:CC" ;;
     esac ;;
 esac
@@ -93,8 +95,20 @@ def keys(tmp_path_factory):
     return out
 
 
+@pytest.fixture(scope="session")
+def pve_ca(tmp_path_factory):
+    """A real CA like /etc/pve/pve-root-ca.pem, and a CSR as the container would make it."""
+    d = tmp_path_factory.mktemp("ca")
+    ossl = ["openssl", "req", "-nodes", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1"]
+    subprocess.run([*ossl, "-x509", "-days", "30", "-subj", "/CN=Proxmox Virtual Environment",
+                    "-keyout", d / "ca.key", "-out", d / "ca.pem"], check=True, capture_output=True)  # fmt: skip
+    subprocess.run([*ossl, "-new", "-subj", "/CN=pvewarden", "-keyout", d / "tls.key", "-out", d / "tls.csr"],
+                   check=True, capture_output=True)  # fmt: skip
+    return d
+
+
 @pytest.fixture
-def host(tmp_path, keys):
+def host(tmp_path, keys, pve_ca):
     """A fake Proxmox host. host.run(*args, **env) runs pvewarden-setup and returns the result."""
     fake = tmp_path / "fake"
     bin_dir = tmp_path / "bin"
@@ -118,7 +132,10 @@ def host(tmp_path, keys):
     )
     pve_etc = tmp_path / "pve"
     (pve_etc / "nodes/pve1").mkdir(parents=True)
-    (pve_etc / "pve-root-ca.pem").write_text("-----BEGIN CERTIFICATE-----\nfake\n")
+    (pve_etc / "pve-root-ca.pem").write_bytes((pve_ca / "ca.pem").read_bytes())
+    (pve_etc / "priv").mkdir()
+    (pve_etc / "priv/pve-root-ca.key").write_bytes((pve_ca / "ca.key").read_bytes())
+    (fake / "tls.csr").write_bytes((pve_ca / "tls.csr").read_bytes())
     keyfile = tmp_path / "admin.pub"
     keyfile.write_text(keys["admin"] + "\n")
     (fake / "alice.keys").write_text(keys["alice1"] + "\n" + keys["alice2"] + "\n")
@@ -205,7 +222,20 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
     assert agent_token in r.stdout  # the agent token is shown once, at the end
     assert "claude mcp add --scope user --transport http pvewarden https://192.0.2.50:8765/mcp" in r.stdout
     # pct exec has no /usr/local/bin in PATH: printed commands must use the full path
-    assert "-- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor" in r.stdout
+    script = (ROOT / "proxmox/pvewarden-setup").read_text()
+    assert "runuser -u pvewarden -- pvewarden" not in script
+
+    # the summary: numbered steps, the Proxmox CA to trust once, the guests
+    assert "1) Trust the Proxmox CA" in r.stdout and "scp root@192.0.2.1:/etc/pve/pve-root-ca.pem ." in r.stdout
+    assert "3) Restart claude" in r.stdout and "Checks     all OK" in r.stdout
+
+    # the TLS certificate: signed by the Proxmox CA, for the server's address, key made in the container
+    cert = host.pushed / "_etc_pvewarden_tls.crt"
+    pve_ca = host.path / "pve/pve-root-ca.pem"
+    assert subprocess.run(["openssl", "verify", "-CAfile", pve_ca, cert], capture_output=True).returncode == 0
+    text = subprocess.run(["openssl", "x509", "-in", cert, "-noout", "-text"], capture_output=True, text=True).stdout
+    assert "IP Address:192.0.2.50" in text and "DNS:pvewarden" in text and "TLS Web Server Authentication" in text
+    assert not list(host.pushed.glob("*tls.key*"))  # the private key never leaves the container
 
     enroll_conf = (host.state / "enroll.conf").read_text()
     assert "AAAASERVERKEY" in enroll_conf and "FROM=192.0.2.50" in enroll_conf
@@ -572,4 +602,27 @@ def test_cancelled_enroll_does_not_abort_the_install(host):
     r = host.run("install")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "enrolling did not finish; run it any time: pvewarden-setup enroll" in r.stdout
-    assert "pvewarden is installed." in r.stdout
+    assert "pvewarden is ready" in r.stdout
+
+
+def test_renew_cert_signs_a_new_certificate(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.77\nCT_IP=192.0.2.77\nCT_HOSTNAME=warden\n")
+    host.mark("ct")
+    r = host.run("renew-cert", "--yes")
+    assert r.returncode == 0, r.stderr
+    text = subprocess.run(
+        ["openssl", "x509", "-in", host.pushed / "_etc_pvewarden_tls.crt", "-noout", "-text"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "IP Address:192.0.2.77" in text and "DNS:warden" in text
+    assert "pct exec 120 -- systemctl restart pvewarden" in host.calls()
+    assert "New certificate for 192.0.2.77 (pve-ca)" in r.stdout
+
+
+def test_renew_cert_refuses_plain_http(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=10.0.0.5\n")
+    r = host.run("renew-cert", "--yes", FAKE_NO_TLS=1)
+    assert r.returncode == 1 and "plain HTTP" in r.stderr
