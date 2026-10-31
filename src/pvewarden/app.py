@@ -191,11 +191,13 @@ class App:
             raise GuestError(f"guest {vmid} runs an outdated pvewarden client without 'services'; re-enroll it")
         return {"vmid": vmid, "name": g.name, **res}
 
-    async def _snapshot(self, g: Guest, description: str) -> str:
+    async def _snapshot(self, g: Guest, description: str, client: str | None = None) -> str:
         pve = self.require_proxmox()
         name = SNAPSHOT_PREFIX + datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        # who asked for it, visible in the Proxmox UI too (the audit log has the details)
+        description = (description or "pvewarden") + (f" (client: {client})" if client else "")
         try:
-            await pve.create_snapshot(g, name, description or "pvewarden")
+            await pve.create_snapshot(g, name, description)
         except ProxmoxError as e:
             if "locked (backup)" in str(e):
                 self._unlocked(replace_lock(g, "backup"))
@@ -203,14 +205,14 @@ class App:
                 f"snapshot of guest {g.vmid} ({g.name}) failed: {e}. Nothing else was done. Tell the user; "
                 "do not retry without a snapshot unless the user asks for that."
             ) from e
-        self.audit.write("snapshot", vmid=g.vmid, snapshot=name)
+        self.audit.write("snapshot", vmid=g.vmid, snapshot=name, client=client)
         return name
 
-    async def snapshot(self, vmid: int, description: str = "") -> str:
+    async def snapshot(self, vmid: int, description: str = "", client: str | None = None) -> str:
         g = await self.guest(vmid)
         self.require(g, self.cfg.policy.tag_update)
         self._unlocked(g)
-        return await self._snapshot(g, description)
+        return await self._snapshot(g, description, client)
 
     async def update_plan(self, vmid: int, mode: str = "security") -> Guest:
         """Check an update may start now, without changing anything."""
@@ -234,7 +236,12 @@ class App:
         return [p["name"] for p in pkgs if p["official"] and not p["held"] and (mode == "all" or p["security"])]
 
     async def apply_updates(
-        self, vmid: int, mode: str = "security", snapshot: bool = True, planned: list[str] | None = None
+        self,
+        vmid: int,
+        mode: str = "security",
+        snapshot: bool = True,
+        planned: list[str] | None = None,
+        client: str | None = None,
     ) -> dict:
         g = await self.update_plan(vmid, mode)
         if planned is None:
@@ -242,7 +249,7 @@ class App:
         if not planned:  # no snapshot, no apt run: nothing would change
             self.audit.write("apply_updates_nothing", vmid=vmid, mode=mode)
             return {"vmid": vmid, "name": g.name, "ok": True, "nothing_to_install": True, "snapshot": None}
-        snap = await self._snapshot(g, f"before {mode} updates") if snapshot else None
+        snap = await self._snapshot(g, f"before {mode} updates", client) if snapshot else None
         before = await self.services(g)
         log = self.runs_dir / f"{datetime.now(UTC):%Y%m%d_%H%M%S}_{vmid}_{g.name}_{mode}.log"
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -350,12 +357,12 @@ class App:
             for s in await self.require_proxmox().snapshots(g)
         ]
 
-    async def rollback_plan(self, vmid: int, snapshot: str) -> dict:
-        """Check a rollback is allowed and the snapshot exists, without changing anything."""
+    async def rollback_plan(self, vmid: int, snapshot: str, what: str = "rolled back") -> dict:
+        """Check a rollback (or deletion) is allowed and the snapshot exists, without changing anything."""
         g = await self.guest(vmid)
         self.require(g, self.cfg.policy.tag_update)
         if not snapshot.startswith(SNAPSHOT_PREFIX):
-            raise PolicyError("only snapshots created by pvewarden can be rolled back")
+            raise PolicyError(f"only snapshots created by pvewarden can be {what}")
         self._unlocked(g)
         self._no_update_running(g)
         found = next((s for s in await self.list_snapshots(vmid) if s["name"] == snapshot), None)
@@ -377,6 +384,13 @@ class App:
         if started:  # like a reboot: report once the guest answers again, not while it still boots
             res |= await self._wait_online(g, wait_s, interval, check_first=True)
         return res
+
+    async def delete_snapshot(self, vmid: int, snapshot: str) -> dict:
+        await self.rollback_plan(vmid, snapshot, "deleted")
+        g = await self.guest(vmid)
+        await self.require_proxmox().delete_snapshot(g, snapshot)
+        self.audit.write("delete_snapshot", vmid=vmid, snapshot=snapshot)
+        return {"vmid": vmid, "name": g.name, "deleted": snapshot}
 
     async def old_snapshots(self, older_than_days: int = 7, vmid: int | None = None) -> list[dict]:
         """pvewarden snapshots older than N days that delete_old_snapshots would remove."""

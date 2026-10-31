@@ -1,10 +1,20 @@
+import asyncio
 import json
+import socket
 
 import httpx
 import pytest
+import uvicorn
+from conftest import GUESTS, FakeProxmox, FakeRunner, make_config
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 
+from pvewarden.app import App
 from pvewarden.audit import AuditLog
-from pvewarden.http import BearerAuth
+from pvewarden.config import parse
+from pvewarden.http import BearerAuth, build_app
+from pvewarden.tools import create_server
 
 TOKEN_A = "a" * 40
 TOKEN_B = "b" * 40
@@ -84,3 +94,27 @@ async def test_serves_the_public_ca_without_a_token(audit):
 
 async def test_no_ca_configured_means_no_ca_endpoint(client):
     assert (await client.get("/ca.pem")).status_code == 401
+
+
+async def test_tools_learn_which_client_called(tmp_path, audit):
+    """End to end over real HTTP: the token's name reaches the tool (snapshot descriptions)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    app = App(parse(make_config(tmp_path, http={"listen": "127.0.0.1", "port": port, "clients": {"alice": TOKEN_A}})))
+    app.pve, app.runner = FakeProxmox(GUESTS), FakeRunner()
+    server = uvicorn.Server(
+        uvicorn.Config(build_app(create_server(app), app.cfg.http, audit), port=port, log_level="error")
+    )
+    task = asyncio.create_task(server.serve())
+    try:
+        while not server.started:  # noqa: ASYNC110 - uvicorn offers no event for this
+            await asyncio.sleep(0.05)
+        http = create_mcp_http_client(headers={"Authorization": f"Bearer {TOKEN_A}"})
+        async with Client(streamable_http_client(f"http://127.0.0.1:{port}/mcp", http_client=http)) as client:
+            res = await client.call_tool("snapshot_guest", {"vmid": 101, "description": "by hand"})
+        assert not res.is_error
+        assert app.pve.snaps[101][0]["description"] == "by hand (client: alice)"
+    finally:
+        server.should_exit = True
+        await task
