@@ -57,7 +57,7 @@ esac
       "ip -4 -o addr show dev eth0") echo "2: eth0    inet 192.0.2.50/24 brd 192.0.2.255 scope global eth0" ;;
       *python3*) echo "192.0.2.0/24" ;;
       "cat /etc/pvewarden/id_ed25519.pub") echo "$FAKE_PUBKEY" ;;
-      "/usr/local/bin/pvewarden token "*) echo "NEW-TOKEN-FOR-${@: -1}"; echo "noise on stderr" >&2 ;;
+      "/usr/local/bin/pvewarden token "*) sleep "${FAKE_DELAY:-0}"; echo "NEW-TOKEN-FOR-${@: -1}"; echo "noise on stderr" >&2 ;;
       "test -f /etc/pvewarden/tls.crt") true ;;
       *fingerprint*) echo "sha256 Fingerprint=AA:BB:CC" ;;
     esac ;;
@@ -522,3 +522,13 @@ def test_token_rotation_rejects_odd_names(host, name):
     (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
     r = host.run("token", "--yes", PVEWARDEN_CLIENT=name)
     assert r.returncode != 0 and not [c for c in host.calls() if "pvewarden token" in c]
+
+
+def test_slow_steps_show_signs_of_life(host):
+    """Even inside $(...) with stderr discarded (token generation), the ticker reaches the user."""
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    r = host.run("token", "--yes", PVEWARDEN_CLIENT="claude", PVEWARDEN_TICK=1, FAKE_DELAY=2.5)
+    assert r.returncode == 0, r.stderr
+    assert "... still working (2s)" in r.stderr
+    assert "still working" not in r.stdout and "NEW-TOKEN-FOR-claude" in r.stdout

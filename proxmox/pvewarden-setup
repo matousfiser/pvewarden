@@ -36,6 +36,7 @@ WORK=$(mktemp -d)
 CREATED_CT=""  # set once a container exists, so a failed install can say what it left behind
 cleanup() {
   local rc=$?
+  [ -z "$TICKER" ] || kill "$TICKER" 2>/dev/null || true
   rm -rf "$WORK"
   if [ "$rc" != 0 ] && [ -n "$CREATED_CT" ]; then
     echo "pvewarden-setup: the install stopped; container $CREATED_CT was already created." >&2
@@ -61,6 +62,34 @@ run() {
   else
     "$@"
   fi
+}
+
+# slow CMD...: like run, for steps that take a while. Prints a sign of life every 15 s, so a
+# slow host does not look like a hung script. Via fd 3 (the original stderr): it also shows
+# inside $(...) and when the command's own stderr is redirected.
+exec 3>&2
+TICKER=""
+slow() {
+  if [ "$DRY_RUN" = 1 ]; then
+    run "$@"
+    return
+  fi
+  local rc=0
+  (
+    n=0
+    # sleep gets no inherited pipes: a killed ticker must not keep a caller waiting for EOF
+    # shellcheck disable=SC2217  # stdin closed on purpose, see above
+    while sleep "${PVEWARDEN_TICK:-15}" </dev/null >/dev/null 2>&1 3>&-; do
+      n=$((n + ${PVEWARDEN_TICK:-15}))
+      echo "    ... still working (${n}s)" >&3
+    done
+  ) &
+  TICKER=$!
+  "$@" || rc=$?
+  kill "$TICKER" 2>/dev/null || true
+  wait "$TICKER" 2>/dev/null || true
+  TICKER=""
+  return "$rc"
 }
 
 # Every question can be answered by an environment variable PVEWARDEN_<NAME>; with --yes the
@@ -397,7 +426,7 @@ ensure_template() {
   [ -n "$TEMPLATE" ] || die "no Debian $DEBIAN template for $arch found in 'pveam available'"
   if ! pveam list "$TEMPLATE_STORAGE" | grep -q "$TEMPLATE"; then
     info "downloading template $TEMPLATE"
-    run pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
+    slow pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
   fi
 }
 
@@ -415,9 +444,10 @@ create_container() {
   [ -n "$SEARCHDOMAIN" ] && args+=(--searchdomain "$SEARCHDOMAIN")
   [ -n "$SSH_KEYS_FILE" ] && args+=(--ssh-public-keys "$SSH_KEYS_FILE")
   info "creating container $CTID"
-  run pct create "$CTID" "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" "${args[@]}"
+  slow pct create "$CTID" "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" "${args[@]}"
   [ "$DRY_RUN" = 1 ] || CREATED_CT=$CTID
-  run pct start "$CTID"
+  info "starting container $CTID"
+  slow pct start "$CTID"
   if [ -n "$ROOT_PASSWORD" ]; then
     # via stdin: the password never appears in a process list or log
     if [ "$DRY_RUN" = 1 ]; then echo "would set the root password"; else
@@ -486,11 +516,11 @@ ct_push() { # ct_push LOCALFILE REMOTEPATH MODE
 }
 
 install_server() {
-  info "installing the server in container $CTID"
+  info "installing the server in container $CTID (apt and pip: usually a few minutes)"
   run pct exec "$CTID" -- mkdir -p /root/pvewarden-src
   ct_push "$SRC_TAR" /root/pvewarden-src.tar.gz 0600
   run pct exec "$CTID" -- tar -C /root/pvewarden-src -xzf /root/pvewarden-src.tar.gz
-  run pct exec "$CTID" -- bash /root/pvewarden-src/deploy/install-server.sh "${LISTEN:-$CT_IP}"
+  slow pct exec "$CTID" -- bash /root/pvewarden-src/deploy/install-server.sh "${LISTEN:-$CT_IP}"
   [ -n "$LISTEN" ] || LISTEN=$CT_IP
 }
 
@@ -554,9 +584,10 @@ EOF
 
 SETUP_PROBLEMS=""
 start_server() {
-  run pct exec "$CTID" -- systemctl restart pvewarden
+  info "starting the pvewarden service"
+  slow pct exec "$CTID" -- systemctl restart pvewarden
   info "checking the setup (pvewarden doctor)"
-  run pct exec "$CTID" -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor || SETUP_PROBLEMS="doctor reported failures (see above)"
+  slow pct exec "$CTID" -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor || SETUP_PROBLEMS="doctor reported failures (see above)"
   [ "$DRY_RUN" = 1 ] && return 0
   sleep 2
   if ! pct exec "$CTID" -- systemctl is-active --quiet pvewarden; then
@@ -715,8 +746,9 @@ do_upgrade() {
   run pct exec "$CTID" -- mkdir -p /root/pvewarden-src
   ct_push "$SRC_TAR" /root/pvewarden-src.tar.gz 0600
   run pct exec "$CTID" -- tar -C /root/pvewarden-src -xzf /root/pvewarden-src.tar.gz
-  run pct exec "$CTID" -- bash /root/pvewarden-src/deploy/install-server.sh "$LISTEN"
-  run pct exec "$CTID" -- systemctl restart pvewarden
+  slow pct exec "$CTID" -- bash /root/pvewarden-src/deploy/install-server.sh "$LISTEN"
+  info "restarting the pvewarden service"
+  slow pct exec "$CTID" -- systemctl restart pvewarden
   CT_IP=${CT_IP:-$LISTEN}
   install_enroll_tool_keep_conf
   save_state
@@ -737,8 +769,10 @@ do_uninstall() {
   confirm "Remove pvewarden?\n\n- the client from every guest in pool $POOL\n- token, user $PVE_USER, role $ROLE and pool $POOL\n- the tools on this host\n\nGuest tags are left in place. The container is removed only if you confirm it next." ||
     die "cancelled"
   if [ -x "$SBIN/pvewarden-enroll" ] && pvesh get "/pools/$POOL" >/dev/null 2>&1; then
+    info "removing the client from the guests in pool $POOL"
     run "$SBIN/pvewarden-enroll" --uninstall --all || true
   fi
+  info "removing Proxmox user $PVE_USER (and its token), role $ROLE and pool $POOL"
   pvesh get "/access/users/$PVE_USER" >/dev/null 2>&1 && run pveum user delete "$PVE_USER"
   pveum role list --output-format json | json 'exit !grep { $_->{roleid} eq "'"$ROLE"'" } @$d' && run pveum role delete "$ROLE"
   if pvesh get "/pools/$POOL" >/dev/null 2>&1; then
@@ -750,15 +784,18 @@ do_uninstall() {
   fi
   if [ -n "$CTID" ] && pct status "$CTID" >/dev/null 2>&1; then
     if [ "$YES" = 0 ] && whiptail --title "$TITLE" --defaultno --yesno "Also destroy container $CTID (the server, its audit log and keys)?" 10 76; then
-      run pct stop "$CTID" || true
-      run pct destroy "$CTID" --purge 1
+      info "stopping and destroying container $CTID"
+      slow pct stop "$CTID" || true
+      slow pct destroy "$CTID" --purge 1
     elif [ "$(env_or DESTROY_CT no)" = yes ]; then
-      run pct stop "$CTID" || true
-      run pct destroy "$CTID" --purge 1
+      info "stopping and destroying container $CTID"
+      slow pct stop "$CTID" || true
+      slow pct destroy "$CTID" --purge 1
     else
       echo "container $CTID was kept"
     fi
   fi
+  info "removing the tools from this host"
   run rm -rf "$HOST_DIR" "$ETC" "$SBIN/pvewarden-enroll" "$SBIN/pvewarden-setup"
   echo "pvewarden removed"
 }
@@ -785,11 +822,11 @@ do_token() {
     return 0
   fi
   # generated inside the container: the token appears only in this output, never in a command line
-  info "Generating a new token in container $CTID ..."
-  token=$(pct exec "$CTID" -- /usr/local/bin/pvewarden token "$client" 2>/dev/null) ||
+  info "generating a new token in container $CTID"
+  token=$(slow pct exec "$CTID" -- /usr/local/bin/pvewarden token "$client" 2>/dev/null) ||
     die "could not set the token (is pvewarden in container $CTID up to date? run: pvewarden-setup upgrade)"
-  info "Restarting the pvewarden service ..."
-  pct exec "$CTID" -- systemctl restart pvewarden
+  info "restarting the pvewarden service"
+  slow pct exec "$CTID" -- systemctl restart pvewarden
   pct exec "$CTID" -- test -f "$CT_ETC/tls.crt" && use_tls=yes
   local url
   url="$([ "$use_tls" = yes ] && echo https || echo http)://$LISTEN:8765/mcp"
