@@ -9,6 +9,8 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pvewarden.audit import AuditLog
 from pvewarden.config import HTTPConfig
 
+CLIENT_KEY = "pvewarden.client"
+
 
 class BearerAuth:
     """ASGI middleware: require 'Authorization: Bearer <token>' of a client from [http.clients].
@@ -81,6 +83,7 @@ class BearerAuth:
         async def replay():
             return messages.pop(0) if messages else await receive()
 
+        scope[CLIENT_KEY] = client  # tools read it from the HTTP request (pvewarden.tools.client_name)
         await self.app(scope, replay, send)
 
 

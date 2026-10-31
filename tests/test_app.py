@@ -343,3 +343,11 @@ async def test_failing_check_stops_the_update(app):
     with pytest.raises(GuestError, match="Could not get lock"):
         await app.apply_updates(101)
     assert app.pve.events == []
+
+
+async def test_snapshot_description_names_the_client(app):
+    await app.apply_updates(101, client="claude")
+    await app.snapshot(101, "manual check")
+    first, second = app.pve.snaps[101]
+    assert first["description"] == "before security updates (client: claude)"
+    assert second["description"] == "manual check"

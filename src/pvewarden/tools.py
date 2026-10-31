@@ -11,10 +11,17 @@ from pvewarden import __version__
 from pvewarden.app import App
 from pvewarden.confirm import confirm
 from pvewarden.errors import WardenError
+from pvewarden.http import CLIENT_KEY
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True)
 CHANGES = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+
+
+def client_name(ctx: Context) -> str | None:
+    """Name of the token the call came with ([http.clients]); None over stdio."""
+    request = getattr(ctx.request_context, "request", None)
+    return (getattr(request, "scope", None) or {}).get(CLIENT_KEY)
 
 
 async def expose(awaitable):
@@ -40,7 +47,8 @@ def create_server(app: App) -> MCPServer:
     )
     if asks:
         instructions += (
-            " Rollback and snapshot deletion are confirmed by the user in a dialog that pvewarden opens in "
+            " Rollback, snapshot deletion and updates without a snapshot are confirmed by the user in a "
+            "dialog that pvewarden opens in "
             "the client; if the user declines, report that and do not retry."
         )
     if app.pve is None:
@@ -96,8 +104,8 @@ def create_server(app: App) -> MCPServer:
         annotations=CHANGES,
         description=f"Create a Proxmox snapshot of a guest (requires tag '{upd}'). Returns the snapshot name.",
     )
-    async def snapshot_guest(vmid: int, description: str = "") -> str:
-        return await expose(app.snapshot(vmid, description))
+    async def snapshot_guest(vmid: int, ctx: Context, description: str = "") -> str:
+        return await expose(app.snapshot(vmid, description, client_name(ctx)))
 
     @mcp.tool(
         annotations=CHANGES,
@@ -130,7 +138,7 @@ def create_server(app: App) -> MCPServer:
             asked = await expose(confirm(ctx, confirm_mode, message, f"nosnapshot:{vmid}:{mode}"))
             if asked is not None:
                 return asked
-        return await expose(app.apply_updates(vmid, mode, snapshot, planned))
+        return await expose(app.apply_updates(vmid, mode, snapshot, planned, client_name(ctx)))
 
     @mcp.tool(
         annotations=READ_ONLY,
@@ -174,6 +182,27 @@ def create_server(app: App) -> MCPServer:
         if asked is not None:
             return asked
         return await expose(app.rollback(vmid, snapshot))
+
+    @mcp.tool(
+        annotations=DESTRUCTIVE,
+        description=(
+            f"Delete one pvewarden snapshot of a guest by name (requires tag '{upd}'); other snapshots are "
+            "never touched. Use it to remove specific snapshots; delete_old_snapshots removes by age."
+            + (" pvewarden asks the user to confirm in the client; if they decline, nothing changes." if asks else "")
+        ),
+    )
+    async def delete_snapshot(vmid: int, snapshot: str, ctx: Context) -> dict | InputRequiredResult:
+        plan = await expose(app.rollback_plan(vmid, snapshot, "deleted"))
+        created = (plan["created"] or "?")[:16].replace("T", " ")
+        message = (
+            f"Delete snapshot {snapshot} of {plan['name']} (VMID {vmid}), taken {created} UTC"
+            + (f" ({plan['description']})" if plan["description"] else "")
+            + "? It can no longer be rolled back to."
+        )
+        asked = await expose(confirm(ctx, confirm_mode, message, f"delete-one:{vmid}:{snapshot}"))
+        if asked is not None:
+            return asked
+        return await expose(app.delete_snapshot(vmid, snapshot))
 
     @mcp.tool(
         annotations=DESTRUCTIVE,

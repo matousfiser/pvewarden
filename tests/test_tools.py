@@ -21,6 +21,7 @@ EXPECTED_TOOLS = {
     "update_result": True,
     "reboot_guest": False,
     "rollback_snapshot": False,
+    "delete_snapshot": False,
     "delete_old_snapshots": False,
 }
 
@@ -212,3 +213,29 @@ async def test_static_inventory_updates_without_asking(app):
     async with Client(create_server(app)) as client:  # no elicitation, and nothing to ask about
         res = await client.call_tool("apply_updates", {"vmid": 1, "snapshot": False})
     assert not res.is_error, text(res)
+
+
+# --- deleting one snapshot -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["legacy", "2026-07-28"])
+async def test_delete_snapshot_asks_and_deletes_only_that_one(snap_app, mode):
+    other = {"name": "pvewarden_20261031_193944", "description": "x", "snaptime": 1_790_000_100}
+    snap_app.pve.snaps[101].append(other)
+    callback, asked = answer(True)
+    async with Client(create_server(snap_app), mode=mode, elicitation_callback=callback) as client:
+        res = await client.call_tool("delete_snapshot", {"vmid": 101, "snapshot": SNAP})
+    assert not res.is_error, text(res)
+    assert len(asked) == 1 and SNAP in asked[0] and "before security updates" in asked[0]
+    assert snap_app.pve.snaps[101] == [other]
+
+
+async def test_delete_snapshot_declined_or_foreign(snap_app):
+    callback, asked = answer(False)
+    snap_app.pve.snaps[101].append({"name": "manual", "snaptime": 1})
+    async with Client(create_server(snap_app), elicitation_callback=callback) as client:
+        res = await client.call_tool("delete_snapshot", {"vmid": 101, "snapshot": SNAP})
+        assert res.is_error and "did not confirm" in text(res)
+        res = await client.call_tool("delete_snapshot", {"vmid": 101, "snapshot": "manual"})
+        assert res.is_error and "only snapshots created by pvewarden can be deleted" in text(res)
+    assert len(asked) == 1 and len(snap_app.pve.snaps[101]) == 2 and snap_app.pve.events == []
