@@ -223,13 +223,30 @@ class App:
         self._no_update_running(g)
         return g
 
-    async def apply_updates(self, vmid: int, mode: str = "security", snapshot: bool = True) -> dict:
+    async def to_install(self, g: Guest, mode: str) -> list[str]:
+        """Packages apply_updates would install: official, not held, security only in mode 'security'."""
+        rc, out = await self.run(g, "check", timeout=600)
+        if rc != 0:
+            raise GuestError(f"checking for updates failed on {g.vmid} ({g.name}): {out.strip()[-500:]}")
+        pkgs = parse_upgradable(out)
+        if not pkgs and out.strip():
+            raise GuestError(f"guest {g.vmid} ({g.name}) runs an outdated pvewarden client; re-enroll it")
+        return [p["name"] for p in pkgs if p["official"] and not p["held"] and (mode == "all" or p["security"])]
+
+    async def apply_updates(
+        self, vmid: int, mode: str = "security", snapshot: bool = True, planned: list[str] | None = None
+    ) -> dict:
         g = await self.update_plan(vmid, mode)
+        if planned is None:
+            planned = await self.to_install(g, mode)
+        if not planned:  # no snapshot, no apt run: nothing would change
+            self.audit.write("apply_updates_nothing", vmid=vmid, mode=mode)
+            return {"vmid": vmid, "name": g.name, "ok": True, "nothing_to_install": True, "snapshot": None}
         snap = await self._snapshot(g, f"before {mode} updates") if snapshot else None
         before = await self.services(g)
         log = self.runs_dir / f"{datetime.now(UTC):%Y%m%d_%H%M%S}_{vmid}_{g.name}_{mode}.log"
         log.parent.mkdir(parents=True, exist_ok=True)
-        pending = {"mode": mode, "snapshot": snap, "services_before": before, "log": str(log)}
+        pending = {"mode": mode, "snapshot": snap, "services_before": before, "log": str(log), "planned": planned}
         self._pending_file(vmid).parent.mkdir(parents=True, exist_ok=True)
         self._pending_file(vmid).write_text(json.dumps(pending))
         self.audit.write("apply_updates_start", vmid=vmid, mode=mode, snapshot=snap, log=str(log))
@@ -249,7 +266,13 @@ class App:
 
     async def _finish_update(self, g: Guest, pending: dict, command: str, log_mode: str) -> dict:
         log = Path(pending["log"])
-        base = {"vmid": g.vmid, "name": g.name, "snapshot": pending["snapshot"], "log": str(log)}
+        base = {
+            "vmid": g.vmid,
+            "name": g.name,
+            "snapshot": pending["snapshot"],
+            "planned": pending.get("planned"),
+            "log": str(log),
+        }
         try:
             rc, out = await self.run(g, command, log=log, log_mode=log_mode)
         except GuestTimeoutError:

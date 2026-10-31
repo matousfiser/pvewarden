@@ -100,7 +100,8 @@ async def test_apply_updates_snapshots_first_then_upgrades(app):
     assert res["ok"] is True
     assert res["snapshot"].startswith(SNAPSHOT_PREFIX)
     assert app.pve.events == [("snapshot", 101, res["snapshot"])]
-    assert app.runner.commands() == ["services", "upgrade-all", "status", "services"]
+    assert app.runner.commands() == ["check", "services", "upgrade-all", "status", "services"]
+    assert res["planned"] == ["openssl", "vim"]  # not docker-ce: third-party
     assert res["newly_failed_services"] == []
     log = app.runs_dir / res["log"].rsplit("/", 1)[1]
     assert log.read_text() == "All upgrades installed\n"
@@ -110,7 +111,7 @@ async def test_apply_updates_aborts_when_snapshot_fails(app):
     app.pve.fail_snapshot = True
     with pytest.raises(ProxmoxError):
         await app.apply_updates(101)
-    assert app.runner.calls == []
+    assert app.runner.commands() == ["check"]
 
 
 async def test_apply_updates_reports_newly_failed_services(app):
@@ -254,7 +255,7 @@ async def test_snapshot_refused_by_a_backup_that_just_started(app):
     app.pve.create_snapshot = locked
     with pytest.raises(GuestError, match="being backed up"):
         await app.apply_updates(101)
-    assert app.runner.calls == []
+    assert app.runner.commands() == ["check"]
 
 
 async def test_failed_snapshot_says_not_to_skip_it(app):
@@ -312,3 +313,33 @@ async def test_update_already_running_on_the_guest(app):
     with pytest.raises(GuestError, match="already running"):
         await app.apply_updates(101)
     assert not app.pending_dir.joinpath("101.json").exists()
+
+
+# --- nothing to install: no snapshot ------------------------------------------------------------
+
+ONLY_REGULAR = "vim\t2:9.1-1\t2:9.1-2\tUbuntu:noble-updates\t-\n"
+HELD = "openssl\t3.0.13-1\t3.0.13-2\tUbuntu:noble-security\theld\n"
+THIRD_PARTY = "docker-ce\t5:29.9.1-1\t5:29.9.2-1\tDocker:noble\t-\n"
+
+
+@pytest.mark.parametrize(
+    "check,mode",
+    [("", "all"), (ONLY_REGULAR, "security"), (HELD, "all"), (THIRD_PARTY, "all")],
+)
+async def test_nothing_to_install_means_no_snapshot(app, check, mode):
+    app.runner.responses["check"] = (0, check)
+    res = await app.apply_updates(101, mode)
+    assert res == {"vmid": 101, "name": "web", "ok": True, "nothing_to_install": True, "snapshot": None}
+    assert app.pve.events == [] and app.runner.commands() == ["check"]
+
+
+async def test_security_mode_plans_only_security_updates(app):
+    res = await app.apply_updates(101, "security")
+    assert res["planned"] == ["openssl"] and res["snapshot"]
+
+
+async def test_failing_check_stops_the_update(app):
+    app.runner.responses["check"] = (100, "E: Could not get lock /var/lib/apt/lists/lock")
+    with pytest.raises(GuestError, match="Could not get lock"):
+        await app.apply_updates(101)
+    assert app.pve.events == []
