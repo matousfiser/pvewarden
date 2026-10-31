@@ -169,14 +169,24 @@ async def test_update_without_snapshot_declined_runs_nothing(app, confirmed):
     async with Client(create_server(app), elicitation_callback=callback) as client:
         res = await client.call_tool("apply_updates", {"vmid": 101, "snapshot": False})
     assert res.is_error and "did not confirm" in text(res)
-    assert asked and app.runner.calls == [] and app.pve.events == []
+    # only the read-only check ran (on 2026-07-28 once per round trip), never an upgrade
+    assert asked and set(app.runner.commands()) == {"check"} and app.pve.events == []
 
 
 async def test_update_without_snapshot_refused_when_the_client_cannot_ask(app):
     async with Client(create_server(app)) as client:  # no elicitation support
         res = await client.call_tool("apply_updates", {"vmid": 101, "snapshot": False})
     assert res.is_error and "cannot ask the user" in text(res)
-    assert app.runner.calls == []
+    assert app.runner.commands() == ["check"]
+
+
+async def test_nothing_to_install_asks_nothing(app):
+    app.runner.responses["check"] = (0, "")
+    callback, asked = answer(False)
+    async with Client(create_server(app), elicitation_callback=callback) as client:
+        res = await client.call_tool("apply_updates", {"vmid": 101, "snapshot": False})
+    assert not res.is_error and "nothing_to_install" in text(res)
+    assert asked == [] and app.runner.commands() == ["check"]
 
 
 async def test_update_with_snapshot_asks_nothing(app):

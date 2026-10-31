@@ -106,7 +106,9 @@ def create_server(app: App) -> MCPServer:
             "distribution's official archives are used: mode='security' installs security updates, "
             "mode='all' also regular updates. Third-party repositories and held packages are never "
             "installed; updates that would need them are skipped. No release upgrades. May auto-remove "
-            "unused old kernels. Takes a snapshot first and aborts if that fails: then tell the user, do not "
+            "unused old kernels. If nothing is pending for the mode, returns nothing_to_install=true without "
+            "a snapshot. 'planned' lists the packages it set out to install. "
+            "Takes a snapshot first and aborts if that fails: then tell the user, do not "
             "retry with snapshot=false on your own. snapshot=false "
             + ("asks the user to confirm in the client. " if asks else "skips the snapshot. ")
             + "Refused while Proxmox locks the guest (e.g. during a backup). Does not reboot. If the result "
@@ -119,7 +121,8 @@ def create_server(app: App) -> MCPServer:
         vmid: int, ctx: Context, mode: Literal["security", "all"] = "security", snapshot: bool = True
     ) -> dict | InputRequiredResult:
         g = await expose(app.update_plan(vmid, mode))
-        if not snapshot and app.pve is not None:  # without Proxmox there are no snapshots to skip
+        planned = await expose(app.to_install(g, mode))
+        if planned and not snapshot and app.pve is not None:  # without Proxmox there are no snapshots to skip
             message = (
                 f"Install {mode} updates on {g.name} (VMID {vmid}) WITHOUT a snapshot? "
                 "If something breaks, there is no snapshot to roll back to."
@@ -127,7 +130,7 @@ def create_server(app: App) -> MCPServer:
             asked = await expose(confirm(ctx, confirm_mode, message, f"nosnapshot:{vmid}:{mode}"))
             if asked is not None:
                 return asked
-        return await expose(app.apply_updates(vmid, mode, snapshot))
+        return await expose(app.apply_updates(vmid, mode, snapshot, planned))
 
     @mcp.tool(
         annotations=READ_ONLY,
