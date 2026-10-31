@@ -125,3 +125,10 @@ def test_token_rejects_odd_client_names(tmp_path, monkeypatch, name):
     path = filled_example(tmp_path, monkeypatch)
     with pytest.raises(ConfigError, match="client name"):
         set_client_token(path, name)
+
+
+def test_http_tls_ca_needs_tls():
+    with pytest.raises(ConfigError, match="tls_ca needs tls_cert"):
+        parse(minimal(http={"listen": "192.0.2.1", "tls_ca": "/ca.pem"}))
+    cfg = parse(minimal(http={"listen": "192.0.2.1", "tls_cert": "/c", "tls_key": "/k", "tls_ca": "/ca.pem"}))
+    assert str(cfg.http.tls_ca) == "/ca.pem"

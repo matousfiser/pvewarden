@@ -79,7 +79,7 @@ def check_local(app: App) -> list[Result]:
             out.append(fail("HTTP", detail, "add a token to [http.clients]"))
         else:
             out.append(ok("HTTP", detail))
-        for f in (h.tls_cert, h.tls_key):
+        for f in (h.tls_cert, h.tls_key, h.tls_ca):
             if f and not os.access(f, os.R_OK):
                 out.append(fail("TLS", f"{f} is missing or not readable"))
         try:

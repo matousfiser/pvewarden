@@ -71,3 +71,16 @@ def test_allowed_hosts_include_configured_names():
 
     cfg = HTTPConfig(listen="192.0.2.10", port=8765, hostnames=("warden.lan",))
     assert allowed_hosts(cfg) == ["192.0.2.10", "192.0.2.10:8765", "warden.lan", "warden.lan:8765"]
+
+
+async def test_serves_the_public_ca_without_a_token(audit):
+    app = BearerAuth(echo_app, {"alice": TOKEN_A}, audit, ca_pem=b"-----BEGIN CERTIFICATE-----\nX\n")
+    c = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+    r = await c.get("/ca.pem")
+    assert r.status_code == 200 and r.content.startswith(b"-----BEGIN CERTIFICATE-----")
+    assert (await c.post("/ca.pem")).status_code == 401  # only GET/HEAD
+    assert (await c.get("/mcp")).status_code == 401  # everything else still needs a token
+
+
+async def test_no_ca_configured_means_no_ca_endpoint(client):
+    assert (await client.get("/ca.pem")).status_code == 401

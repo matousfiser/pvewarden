@@ -6,8 +6,9 @@ pvewarden is a remote MCP server (streamable HTTP). A client needs three things:
 2. a **token**, sent as `Authorization: Bearer <token>`,
 3. with HTTPS, **trust in the server's certificate**.
 
-`pvewarden-setup` prints the endpoint and a token at the end of the install. A new token,
-for example for a second agent, comes from `pvewarden-setup token`. Each agent should have its own
+`pvewarden-setup` prints all three at the end of the install. `pvewarden-setup connect` prints
+them again, without the token. A new token, for example for a second agent, comes from
+`pvewarden-setup token`. Each agent should have its own
 token: the audit log records which one acted.
 
 ## The certificate
@@ -19,28 +20,32 @@ That includes the certificate `pvewarden-setup renew-cert` issues after the serv
 changed. The certificate's private key is created in the server container and never leaves
 it. The CA key stays on the Proxmox host.
 
-Get the CA:
+The server offers the CA without a token at `https://<server>:8765/ca.pem`. The summary
+`pvewarden-setup` prints contains a paste-ready command for PowerShell and for Linux/macOS. The
+command:
 
-```
-scp root@<proxmox>:/etc/pve/pve-root-ca.pem .
-```
+1. downloads `/ca.pem`,
+2. checks its SHA-256 against the fingerprint written into the command, and deletes the file
+   if it does not match,
+3. sets `NODE_EXTRA_CA_CERTS` to it. If that variable already points to some other file, the
+   command changes nothing and tells you to add the CA to that file instead.
 
-It is a public certificate, not a secret. You can paste it anywhere, for example into a
-container image.
+The download skips certificate validation (`curl -k`), since nothing is trusted yet. The
+fingerprint check makes that safe: a certificate swapped on the way does not match. SSH's
+first-connection check works the same way, except that here nobody has to compare the
+fingerprint by eye.
+
+The CA is a public certificate, not a secret. You can copy it anywhere, for example into a
+container image. On the Proxmox host it is `/etc/pve/pve-root-ca.pem`.
 
 Installs from before this change, or hosts without the CA key, use a self-signed certificate.
 `pvewarden-setup renew-cert` switches them to the Proxmox CA.
 
 ## Claude Code
 
-1. Make Node trust the CA:
-
-   ```
-   # Windows PowerShell (then open a new terminal)
-   setx NODE_EXTRA_CA_CERTS "$env:USERPROFILE\pve-root-ca.pem"
-   # Linux / macOS
-   echo 'export NODE_EXTRA_CA_CERTS=~/pve-root-ca.pem' >> ~/.bashrc
-   ```
+1. Make Node trust the CA: run the command from the install summary or from
+   `pvewarden-setup connect`, then open a new terminal. To do it by hand, save the CA as a file
+   and set `NODE_EXTRA_CA_CERTS` to its path.
 
 2. Add the server. Use one line; it works in every shell:
 
