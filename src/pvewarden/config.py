@@ -2,6 +2,8 @@
 
 import ipaddress
 import os
+import re
+import secrets
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -189,3 +191,30 @@ def load(path: Path | str) -> Config:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from e
     return parse(data)
+
+
+CLIENT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def set_client_token(path: Path | str, name: str) -> str:
+    """Give HTTP client `name` a new random token in [http.clients], in place. Returns the token.
+
+    The old token stops working once the server restarts. Comments and layout are kept: only the
+    client's line is replaced (or added at the top of the section).
+    """
+    if not CLIENT_NAME.match(name):
+        raise ConfigError(f"client name may contain letters, digits, '-' and '_': {name!r}")
+    path = Path(path)
+    text = path.read_text()
+    section = re.search(r"(?ms)^\[http\.clients\][ \t]*\n(.*?)(?=^\[|\Z)", text)
+    if section is None:
+        raise ConfigError(f"{path}: no [http.clients] section")
+    token = secrets.token_urlsafe(32)
+    line = f'{name} = "{token}"'
+    body = section.group(1)
+    existing = re.compile(rf"^{re.escape(name)}[ \t]*=.*$", re.M)
+    body = existing.sub(line, body, count=1) if existing.search(body) else f"{line}\n{body}"
+    text = text[: section.start(1)] + body + text[section.end(1) :]
+    parse(tomllib.loads(text))  # never write a config the server would reject
+    path.write_text(text)  # same file: owner and mode stay
+    return token

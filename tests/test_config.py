@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pvewarden.config import TOKEN_SECRET_ENV, ConfigError, load, parse
+from pvewarden.config import TOKEN_SECRET_ENV, ConfigError, load, parse, set_client_token
 
 ROOT = Path(__file__).parent.parent
 
@@ -90,3 +90,38 @@ def test_http_tls_needs_cert_and_key():
     cfg = parse(minimal(http={"listen": "192.0.2.1", "tls_cert": "/c", "tls_key": "/k", "hostnames": ["w.lan"]}))
     assert cfg.http.scheme == "https" and cfg.http.hostnames == ("w.lan",)
     assert parse(minimal(http={"listen": "192.0.2.1"})).http.scheme == "http"
+
+
+def filled_example(tmp_path, monkeypatch) -> Path:
+    monkeypatch.setenv(TOKEN_SECRET_ENV, "s" * 36)
+    path = tmp_path / "config.toml"
+    path.write_text((ROOT / "config.example.toml").read_text().replace('agent = "CHANGE_ME"', f'agent = "{"a" * 43}"'))
+    path.chmod(0o640)
+    return path
+
+
+def test_token_rotation_replaces_only_that_client(tmp_path, monkeypatch, capsys):
+    from pvewarden.cli import main
+
+    path = filled_example(tmp_path, monkeypatch)
+    before = path.read_text()
+    main(["-c", str(path), "token"])
+    new = capsys.readouterr().out.strip()
+    assert len(new) >= 32 and new != "a" * 43
+    after = path.read_text()
+    assert load(path).http.clients == {"agent": new}
+    assert after.replace(new, "a" * 43) == before  # comments and layout untouched
+    assert path.stat().st_mode & 0o777 == 0o640
+
+
+def test_token_for_a_new_client_is_added(tmp_path, monkeypatch):
+    path = filled_example(tmp_path, monkeypatch)
+    new = set_client_token(path, "ci-bot")
+    assert load(path).http.clients == {"ci-bot": new, "agent": "a" * 43}
+
+
+@pytest.mark.parametrize("name", ["", "a b", 'x" = 1 #', "../x"])
+def test_token_rejects_odd_client_names(tmp_path, monkeypatch, name):
+    path = filled_example(tmp_path, monkeypatch)
+    with pytest.raises(ConfigError, match="client name"):
+        set_client_token(path, name)

@@ -1,6 +1,6 @@
 #!/bin/bash
 # pvewarden-setup — install, upgrade or remove pvewarden. Run as root on a Proxmox VE host.
-#   pvewarden-setup [install|upgrade|enroll|uninstall] [--yes] [--dry-run] [--source DIR|TARBALL]
+#   pvewarden-setup [install|upgrade|enroll|token|uninstall] [--yes] [--dry-run] [--source DIR|TARBALL]
 #     no command      interactive menu
 #     --yes           take defaults / PVEWARDEN_* environment variables instead of asking
 #     --dry-run       show what would be done, change nothing
@@ -582,6 +582,19 @@ install_enroll_tool() {
   fi
 }
 
+# client_instructions URL TOKEN USE_TLS: how to connect an MCP client
+client_instructions() {
+  cat <<EOF
+ Claude Code:
+   claude mcp add --scope user --transport http pvewarden $1 \\
+     --header "Authorization: Bearer $2"
+$([ "$3" = yes ] && printf '   (trust the certificate first, e.g. NODE_EXTRA_CA_CERTS=./pvewarden.crt)\n')
+ Other MCP clients:
+   { "mcpServers": { "pvewarden": { "type": "http", "url": "$1",
+       "headers": { "Authorization": "Bearer $2" } } } }
+EOF
+}
+
 final_message() {
   local scheme url fingerprint=""
   scheme=$([ "$USE_TLS" = yes ] && echo https || echo http)
@@ -604,13 +617,7 @@ final_message() {
                 (shown only now; it is stored in $CT_ETC/config.toml in container $CTID)
 $([ -n "$fingerprint" ] && printf ' TLS cert       self-signed, SHA-256 %s\n                copy it from the container: pct pull %s %s/tls.crt ./pvewarden.crt\n' "$fingerprint" "$CTID" "$CT_ETC")
 
- Claude Code:
-   claude mcp add --transport http pvewarden $url \\
-     --header "Authorization: Bearer $AGENT_TOKEN"
-$([ "$USE_TLS" = yes ] && printf '   (trust the certificate first, e.g. NODE_EXTRA_CA_CERTS=./pvewarden.crt)\n')
- Other MCP clients:
-   { "mcpServers": { "pvewarden": { "type": "http", "url": "$url",
-       "headers": { "Authorization": "Bearer $AGENT_TOKEN" } } } }
+$(client_instructions "$url" "$AGENT_TOKEN" "$USE_TLS")
 
  Next: let pvewarden manage guests:  pvewarden-setup enroll
    or: pvewarden-enroll --pool --tags $TAG_UPDATE <VMID>
@@ -753,6 +760,46 @@ do_uninstall() {
 
 # ============================================================================================
 
+# ============================================================================================
+# token: rotate an agent's token
+# ============================================================================================
+
+do_token() {
+  load_state
+  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+  local client token use_tls=no
+  ask CLIENT "Which agent gets a new token? (client name in the server config)" agent
+  # shellcheck disable=SC2153  # set by ask
+  client=$CLIENT
+  case "$client" in "" | *[!A-Za-z0-9_-]*) die "client name may contain letters, digits, '-' and '_'" ;; esac
+  confirm "Give '$client' a new token?\n\nThe old token stops working immediately: update it in every MCP client that uses it." ||
+    die "cancelled"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "would run: pct exec $CTID -- /usr/local/bin/pvewarden token $client"
+    echo "would run: pct exec $CTID -- systemctl restart pvewarden"
+    return 0
+  fi
+  # generated inside the container: the token appears only in this output, never in a command line
+  token=$(pct exec "$CTID" -- /usr/local/bin/pvewarden token "$client" 2>/dev/null) ||
+    die "could not set the token (is pvewarden in container $CTID up to date? run: pvewarden-setup upgrade)"
+  pct exec "$CTID" -- systemctl restart pvewarden
+  pct exec "$CTID" -- test -f "$CT_ETC/tls.crt" && use_tls=yes
+  local url
+  url="$([ "$use_tls" = yes ] && echo https || echo http)://$LISTEN:8765/mcp"
+  cat <<EOF
+
+================================================================================
+ New token for '$client' (shown only now; the old one no longer works):
+
+   $token
+
+ Replace it in your MCP client. Claude Code:
+   claude mcp remove --scope user pvewarden
+$(client_instructions "$url" "$token" "$use_tls" | sed 1d)
+================================================================================
+EOF
+}
+
 usage() {
   sed -n '3,7s/^#  \{0,1\}//p' "$0"
   exit 2
@@ -760,7 +807,7 @@ usage() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    install | upgrade | enroll | uninstall) COMMAND=$1 ;;
+    install | upgrade | enroll | token | uninstall) COMMAND=$1 ;;
     --yes | -y) YES=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --source)
@@ -782,6 +829,7 @@ if [ -z "$COMMAND" ]; then
     install "Install pvewarden" \
     enroll "Let pvewarden manage more guests" \
     upgrade "Upgrade an existing installation" \
+    token "Give an agent a new token (the old one stops working)" \
     uninstall "Remove pvewarden"
 fi
 "do_$COMMAND"

@@ -4,7 +4,7 @@ import os
 import sys
 
 from pvewarden import __version__
-from pvewarden.config import DEFAULT_CONFIG_PATH, ConfigError, load
+from pvewarden.config import DEFAULT_CONFIG_PATH, ConfigError, load, set_client_token
 
 
 def serve(args: argparse.Namespace) -> None:
@@ -55,6 +55,16 @@ def doctor(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def token(args: argparse.Namespace) -> None:
+    new = set_client_token(args.config, args.name)
+    print(new)
+    print(
+        f"new token for HTTP client {args.name!r} written to {args.config}; the old one stops working once "
+        "the server restarts (systemctl restart pvewarden)",
+        file=sys.stderr,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="pvewarden", description="Agent-safe patching of Proxmox VE guests over MCP")
     parser.add_argument("--version", action="version", version=f"pvewarden {__version__}")
@@ -72,6 +82,9 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=check_config)
     p = sub.add_parser("doctor", help="check Proxmox access, token privileges and SSH to every guest")
     p.set_defaults(func=doctor)
+    p = sub.add_parser("token", help="give an HTTP client a new random token (rotation) and print it")
+    p.add_argument("name", nargs="?", default="agent", help="client name in [http.clients] (default: agent)")
+    p.set_defaults(func=token)
 
     args = parser.parse_args(argv)
     try:
