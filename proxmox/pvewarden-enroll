@@ -3,6 +3,7 @@
 #   pvewarden-enroll [--pool] [--tags tag1,tag2] VMID...   install, optionally add to pool / merge tags
 #   pvewarden-enroll --all                                 re-install on every guest in the pool
 #   pvewarden-enroll --uninstall VMID...                   remove the client from guests
+#   --auto-updates keep|off|on                             guests' own daily updates (default keep)
 #   --dry-run (with any of the above)                      show what would change, change nothing
 set -euo pipefail
 
@@ -15,7 +16,7 @@ POOL=pvewarden
 : "${PUBKEY:?PUBKEY missing in $CONF}" "${FROM:?FROM missing in $CONF}"
 
 usage() {
-  sed -n '3,6s/^#  //p' "$0"
+  sed -n '3,7s/^#  //p' "$0"
   exit 2
 }
 
@@ -100,7 +101,7 @@ merge_tags() {
   fi
 }
 
-DO_POOL=0 TAGS="" UNINSTALL=0 DRY_RUN=0 IDS=()
+DO_POOL=0 TAGS="" UNINSTALL=0 DRY_RUN=0 AUTO=keep IDS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --pool) DO_POOL=1 ;;
@@ -110,6 +111,11 @@ while [ $# -gt 0 ]; do
       ;;
     --all) mapfile -t IDS < <(pool_members) ;;
     --uninstall) UNINSTALL=1 ;;
+    --auto-updates)
+      AUTO=${2:-}
+      case "$AUTO" in keep | off | on) ;; *) usage ;; esac
+      shift
+      ;;
     --dry-run) DRY_RUN=1 ;;
     -h | --help) usage ;;
     [0-9]*) IDS+=("$1") ;;
@@ -119,7 +125,13 @@ while [ $# -gt 0 ]; do
 done
 [ ${#IDS[@]} -gt 0 ] || usage
 
-if [ "$UNINSTALL" = 1 ]; then ARGS=(--uninstall); else ARGS=("$PUBKEY" "$FROM"); fi
+if [ "$UNINSTALL" = 1 ]; then
+  ARGS=(--uninstall)
+elif [ "$AUTO" = keep ]; then
+  ARGS=("$PUBKEY" "$FROM") # also what older guest clients understand
+else
+  ARGS=("--auto-updates=$AUTO" "$PUBKEY" "$FROM")
+fi
 [ "$DRY_RUN" = 1 ] && ARGS=(--dry-run "${ARGS[@]}")
 
 failed=()

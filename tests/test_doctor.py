@@ -28,8 +28,10 @@ async def test_healthy_setup_has_no_failures(healthy):
     assert [r for r in results if r.status != "ok"] == []
     titles = by_title(results)
     assert "Proxmox VE 9.0.10" in titles["Proxmox API"].detail
-    assert titles["Guest 101 web"].detail == "192.0.2.11, Ubuntu 24.04.1 LTS, allowed: update, reboot"
-    assert titles["Guest 103 readonly"].detail.endswith("allowed: read-only")
+    assert titles["Guest 101 web"].detail == (
+        "192.0.2.11, Ubuntu 24.04.1 LTS, allowed: update, reboot, automatic updates on (no snapshots)"
+    )
+    assert titles["Guest 103 readonly"].detail.endswith("allowed: read-only, automatic updates on (no snapshots)")
     assert "Guest 104 off" not in titles  # stopped guests are not contacted
     assert "[FAIL]" not in render(results)
 

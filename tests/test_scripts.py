@@ -76,6 +76,15 @@ def test_install_dry_run_shows_exact_changes():
     assert 'restrict,from="192.0.2.10",command="/usr/local/sbin/pvewarden-gate" ssh-ed25519 AAAATEST srv' in r.stdout
     assert "NOPASSWD: /usr/local/sbin/pvewarden-guest check, " in r.stdout
     assert all(line.startswith("would: ") for line in r.stdout.splitlines())
+    assert "auto-upgrades" not in r.stdout  # keep (default) leaves the guest's setting alone
+
+
+def test_install_dry_run_auto_updates_off():
+    r = run_install("--dry-run", "--auto-updates=off", "ssh-ed25519 AAAATEST srv", "192.0.2.10")
+    if r.returncode == 3:
+        pytest.skip("test host is not a supported distribution")
+    assert "would: write /etc/apt/apt.conf.d/52pvewarden-auto-upgrades: automatic updates off" in r.stdout
+    assert run_install("--dry-run", "--auto-updates=maybe", "ssh-ed25519 A k", "192.0.2.10").returncode == 2
 
 
 @pytest.mark.parametrize(
@@ -167,6 +176,14 @@ def test_enroll_dry_run_changes_nothing(enroll):
     assert "INSTALL --dry-run ssh-ed25519 AAAATEST srv 192.0.2.10" in r.stdout
     assert "would: set tags" in r.stdout
     assert "SET " not in r.stdout and "PVEUM" not in r.stdout
+
+
+def test_enroll_passes_auto_updates_only_when_changing_it(enroll):
+    r = enroll("--auto-updates", "off", "201")
+    assert "INSTALL --auto-updates=off ssh-ed25519 AAAATEST srv 192.0.2.10" in r.stdout
+    r = enroll("--auto-updates", "keep", "201")
+    assert "INSTALL ssh-ed25519 AAAATEST srv 192.0.2.10" in r.stdout  # older clients understand this
+    assert enroll("--auto-updates", "maybe", "201").returncode == 2
 
 
 def test_enroll_all_and_uninstall(enroll):

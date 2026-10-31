@@ -77,6 +77,10 @@ PY
     echo "uptime_s=$(cut -d' ' -f1 /proc/uptime)"
     if [ -f /var/run/reboot-required ]; then echo "reboot_required=yes"; else echo "reboot_required=no"; fi
     [ -f /var/run/reboot-required.pkgs ] && sed 's/^/reboot_pkg=/' /var/run/reboot-required.pkgs
+    # does the guest's own daily unattended-upgrades run install updates (without a pvewarden snapshot)?
+    au=0
+    eval "$(apt-config shell au APT::Periodic::Unattended-Upgrade)"
+    case "$au" in "" | 0) echo "auto_updates=no" ;; *) echo "auto_updates=yes" ;; esac
     true
     ;;
   upgrade-security)

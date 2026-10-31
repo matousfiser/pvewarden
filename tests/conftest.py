@@ -18,7 +18,7 @@ CHECK_OUT = (
     "vim\t2:9.1.0016-1ubuntu7.3\t2:9.1.0016-1ubuntu7.4\tUbuntu:noble-updates\t-\n"
     "docker-ce\t5:29.9.1-1\t5:29.9.2-1\tDocker:noble\t-\n"
 )
-STATUS_OUT = "os=Ubuntu 24.04.1 LTS\nkernel=6.8.0-1-generic\nuptime_s=100.0\nreboot_required=no\n"
+STATUS_OUT = "os=Ubuntu 24.04.1 LTS\nkernel=6.8.0-1-generic\nuptime_s=100.0\nreboot_required=no\nauto_updates=yes\n"
 SERVICES_OUT = "system=running\n"
 
 

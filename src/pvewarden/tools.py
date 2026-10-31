@@ -66,6 +66,8 @@ def create_server(app: App) -> MCPServer:
             "'official' (from the distribution archives) and 'security' flags. Updates from third-party "
             "repositories are listed in 'third_party_report_only': apply_updates never installs them; "
             "report them to the user, especially major version jumps. 'held' = apt-mark hold, also skipped. "
+            "auto_updates=true means the guest also installs updates by itself every day (unattended-upgrades) "
+            "without a pvewarden snapshot; mention it to the user, it explains updates nobody asked for. "
             "Without vmids, checks every running guest. Read-only."
         ),
     )

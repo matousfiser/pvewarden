@@ -689,7 +689,12 @@ do_enroll() {
     reboot) tags="$TAG_UPDATE,$TAG_REBOOT" ;;
     *) die "unknown level $level" ;;
   esac
-  local args=(--pool)
+  choose AUTO_UPDATES "Automatic updates on the selected guests?\n\nA guest's own unattended-upgrades can install updates every day by itself, without a pvewarden snapshot (Ubuntu does it by default; Debian once unattended-upgrades is installed, which pvewarden needs). The client reports the result for each guest." keep \
+    keep "Keep each guest's current setting" \
+    off "Turn off: only pvewarden installs updates, with snapshots" \
+    on "Turn on: guests also update themselves daily"
+  # shellcheck disable=SC2153  # set by choose
+  local args=(--pool --auto-updates "$AUTO_UPDATES")
   [ -n "$tags" ] && args+=(--tags "$tags")
   [ "$DRY_RUN" = 1 ] && args+=(--dry-run)
   # shellcheck disable=SC2086  # one VMID per word
