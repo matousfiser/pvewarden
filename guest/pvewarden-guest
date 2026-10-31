@@ -1,6 +1,6 @@
 #!/bin/bash
 # /usr/local/sbin/pvewarden-guest — privileged worker. The pvewarden user may run exactly
-# the four commands below as root (see /etc/sudoers.d/pvewarden); nothing else.
+# the commands below as root (see /etc/sudoers.d/pvewarden); nothing else.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=300)
@@ -57,7 +57,74 @@ upgrade_from() {
   return $rc
 }
 
+# --- updates run detached ----------------------------------------------------------------
+# An update must not die halfway through dpkg because the SSH connection dropped or the server
+# stopped waiting. So upgrade-* starts the real work as its own process (a transient systemd unit
+# where systemd runs, else a new session) and only follows its output. upgrade-follow attaches
+# again later and ends with the same exit status.
+RUN_DIR=/var/lib/pvewarden
+LOG=$RUN_DIR/upgrade.log RC=$RUN_DIR/upgrade.rc PIDF=$RUN_DIR/upgrade.pid LOCK=$RUN_DIR/upgrade.lock
+SELF=$(readlink -f "$0")
+
+running() { [ -e "$LOCK" ] && ! flock -n "$LOCK" true; }
+
+# follow: print the current run's output from the start until it ends, then exit with its status
+follow() {
+  local pid=""
+  for _ in $(seq 50); do  # the run writes its pid right after it starts
+    pid=$(cat "$PIDF" 2>/dev/null) || true
+    if [ -n "$pid" ] || [ -e "$RC" ]; then break; fi
+    sleep 0.2
+  done
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    tail -n +1 -f --pid="$pid" "$LOG"
+  else
+    cat "$LOG" 2>/dev/null || true
+  fi
+  if [ -s "$RC" ]; then exit "$(cat "$RC")"; fi
+  echo "pvewarden: the update process ended without reporting a result" >&2
+  exit 1
+}
+
+start_upgrade() {
+  install -d -m 0700 "$RUN_DIR"
+  if running; then
+    echo "pvewarden: an update is already running on this guest; follow it with upgrade-follow" >&2
+    exit 75
+  fi
+  rm -f "$RC" "$PIDF"
+  : > "$LOG"
+  if [ -d /run/systemd/system ] && command -v systemd-run >/dev/null; then
+    systemd-run --quiet --collect --unit="pvewarden-upgrade-$(date +%s)" \
+      --description="pvewarden: $1" "$SELF" run "$1" >/dev/null
+  else
+    setsid -f "$SELF" run "$1" </dev/null >/dev/null 2>&1
+  fi
+  follow
+}
+
 case "${1:-}" in
+  run)
+    # internal: the detached update itself (started by start_upgrade, never over SSH)
+    [ "${2:-}" = upgrade-security ] || [ "${2:-}" = upgrade-all ] || exit 2
+    exec 9>"$LOCK"
+    flock -n 9 || exit 75
+    echo $$ > "$PIDF"
+    rc=0
+    "$SELF" "now-$2" >> "$LOG" 2>&1 || rc=$?
+    echo "$rc" > "$RC"
+    rm -f "$PIDF"
+    ;;
+  upgrade-security | upgrade-all)
+    start_upgrade "$1"
+    ;;
+  upgrade-follow)
+    if [ ! -e "$LOG" ]; then
+      echo "pvewarden: no update has run on this guest yet" >&2
+      exit 4
+    fi
+    follow
+    ;;
   check)
     # one line per upgradable package: name, installed, candidate, origin:archive list, held
     apt-get update -qq "${APT_OPTS[@]}" >/dev/null
@@ -83,16 +150,16 @@ PY
     case "$au" in "" | 0) echo "auto_updates=no" ;; *) echo "auto_updates=yes" ;; esac
     true
     ;;
-  upgrade-security)
+  now-upgrade-security)
     apt-get update -qq "${APT_OPTS[@]}"
     upgrade_from "${SECURITY[@]}"
     ;;
-  upgrade-all)
+  now-upgrade-all)
     apt-get update -qq "${APT_OPTS[@]}"
     upgrade_from "${SECURITY[@]}" "${REGULAR[@]}"
     ;;
   *)
-    echo "usage: pvewarden-guest check|status|upgrade-security|upgrade-all" >&2
+    echo "usage: pvewarden-guest check|status|upgrade-security|upgrade-all|upgrade-follow" >&2
     exit 2
     ;;
 esac

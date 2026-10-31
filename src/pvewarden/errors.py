@@ -23,3 +23,7 @@ class ProxmoxError(WardenError):
 
 class GuestError(WardenError):
     pass
+
+
+class GuestTimeoutError(GuestError):
+    """pvewarden stopped waiting; the command may still be running on the guest."""

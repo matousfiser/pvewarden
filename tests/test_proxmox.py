@@ -28,12 +28,16 @@ async def test_guests_sends_token_and_skips_templates(pve):
         json={
             "data": [
                 {"vmid": 101, "name": "web", "type": "lxc", "node": "pve1", "status": "running", "tags": "a;b"},
+                {"vmid": 102, "name": "db", "type": "lxc", "node": "pve1", "status": "running", "lock": "backup"},
                 {"vmid": 9000, "name": "tpl", "type": "qemu", "node": "pve1", "status": "stopped", "template": 1},
             ]
         }
     )
     guests = await pve.guests()
-    assert guests == [Guest(101, "web", "lxc", "pve1", "running", ("a", "b"))]
+    assert guests == [
+        Guest(101, "web", "lxc", "pve1", "running", ("a", "b")),
+        Guest(102, "db", "lxc", "pve1", "running", (), lock="backup"),
+    ]
     request = route.calls.last.request
     assert request.headers["Authorization"] == "PVEAPIToken=pvewarden@pve!t=s3cret"
     assert request.url.params["type"] == "vm"

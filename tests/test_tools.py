@@ -8,6 +8,7 @@ from conftest import UPD
 from mcp import Client
 from mcp_types import ElicitResult
 
+from pvewarden.config import StaticGuest
 from pvewarden.tools import create_server
 
 EXPECTED_TOOLS = {
@@ -17,6 +18,7 @@ EXPECTED_TOOLS = {
     "list_snapshots": True,
     "snapshot_guest": False,
     "apply_updates": False,
+    "update_result": True,
     "reboot_guest": False,
     "rollback_snapshot": False,
     "delete_old_snapshots": False,
@@ -146,3 +148,57 @@ async def test_delete_old_snapshots_lists_what_it_deletes_and_asks(snap_app, mod
         assert len(snap_app.pve.snaps[101]) == 1
         nothing = await client.call_tool("delete_old_snapshots", {"older_than_days": 99999})
     assert not nothing.is_error and len(asked) == 1  # nothing to delete: no question
+
+
+# --- updates without a snapshot need the user ------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["legacy", "2026-07-28"])
+async def test_update_without_snapshot_asks_the_user(app, mode):
+    callback, asked = answer(True)
+    async with Client(create_server(app), mode=mode, elicitation_callback=callback) as client:
+        res = await client.call_tool("apply_updates", {"vmid": 101, "snapshot": False})
+    assert not res.is_error, text(res)
+    assert len(asked) == 1 and "WITHOUT a snapshot" in asked[0] and "web" in asked[0]
+    assert "upgrade-security" in app.runner.commands() and app.pve.events == []
+
+
+@pytest.mark.parametrize("confirmed", [False, None])
+async def test_update_without_snapshot_declined_runs_nothing(app, confirmed):
+    callback, asked = answer(confirmed)
+    async with Client(create_server(app), elicitation_callback=callback) as client:
+        res = await client.call_tool("apply_updates", {"vmid": 101, "snapshot": False})
+    assert res.is_error and "did not confirm" in text(res)
+    assert asked and app.runner.calls == [] and app.pve.events == []
+
+
+async def test_update_without_snapshot_refused_when_the_client_cannot_ask(app):
+    async with Client(create_server(app)) as client:  # no elicitation support
+        res = await client.call_tool("apply_updates", {"vmid": 101, "snapshot": False})
+    assert res.is_error and "cannot ask the user" in text(res)
+    assert app.runner.calls == []
+
+
+async def test_update_with_snapshot_asks_nothing(app):
+    callback, asked = answer(False)
+    async with Client(create_server(app), elicitation_callback=callback) as client:
+        res = await client.call_tool("apply_updates", {"vmid": 101})
+    assert not res.is_error, text(res)
+    assert asked == [] and [e[0] for e in app.pve.events] == ["snapshot"]
+
+
+async def test_update_without_snapshot_checks_policy_before_asking(app):
+    callback, asked = answer(True)
+    app.pve._guests[101] = replace(app.pve._guests[101], lock="backup")
+    async with Client(create_server(app), elicitation_callback=callback) as client:
+        res = await client.call_tool("apply_updates", {"vmid": 101, "snapshot": False})
+    assert res.is_error and "backed up" in text(res)
+    assert asked == [] and app.runner.calls == []
+
+
+async def test_static_inventory_updates_without_asking(app):
+    app.pve = None
+    app.cfg = replace(app.cfg, static_guests=(StaticGuest(1, "t", "192.0.2.50", tags=(UPD,)),))
+    async with Client(create_server(app)) as client:  # no elicitation, and nothing to ask about
+        res = await client.call_tool("apply_updates", {"vmid": 1, "snapshot": False})
+    assert not res.is_error, text(res)

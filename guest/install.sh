@@ -48,11 +48,12 @@ auto_updates_state() {
 
 if [ "$UNINSTALL" = 1 ]; then
   say "remove user $USER_NAME and its home directory"
-  say "remove $SBIN/pvewarden-guest, $SBIN/pvewarden-gate, $SUDOERS"
+  say "remove $SBIN/pvewarden-guest, $SBIN/pvewarden-gate, $SUDOERS, /var/lib/pvewarden (last update's log)"
   [ -f "$AUTO_CONF" ] && say "remove $AUTO_CONF (automatic updates go back to the guest's own setting)"
   if real; then
     if id "$USER_NAME" >/dev/null 2>&1; then userdel -r "$USER_NAME" 2>/dev/null || true; fi
     rm -f "$SBIN/pvewarden-guest" "$SBIN/pvewarden-gate" "$SUDOERS" "$AUTO_CONF"
+    rm -rf /var/lib/pvewarden
     echo "pvewarden client removed"
   fi
   exit 0
@@ -75,7 +76,7 @@ case "$ID" in
   *) echo "unsupported distribution: $ID (supported: ubuntu, debian)" >&2; exit 3 ;;
 esac
 
-SUDO_RULE="$USER_NAME ALL=(root) NOPASSWD: $SBIN/pvewarden-guest check, $SBIN/pvewarden-guest status, $SBIN/pvewarden-guest upgrade-security, $SBIN/pvewarden-guest upgrade-all"
+SUDO_RULE="$USER_NAME ALL=(root) NOPASSWD: $SBIN/pvewarden-guest check, $SBIN/pvewarden-guest status, $SBIN/pvewarden-guest upgrade-security, $SBIN/pvewarden-guest upgrade-all, $SBIN/pvewarden-guest upgrade-follow"
 KEY_LINE="restrict,from=\"$FROM\",command=\"$SBIN/pvewarden-gate\" $PUBKEY"
 
 # check/upgrade need unattended-upgrades (it pulls in python3-apt); minimal images often lack sudo.

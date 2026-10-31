@@ -34,7 +34,9 @@ def create_server(app: App) -> MCPServer:
         "(snapshots first) -> reboot_guest if reboot_required -> report. "
         f"Permissions come from Proxmox tags: '{upd}' allows updates, snapshots and rollback, "
         f"'{rbt}' allows reboots; guests without tags are read-only. If a tool refuses, report it to the "
-        "user instead of looking for a workaround. Never roll back unless the user explicitly asks."
+        "user instead of looking for a workaround. Never roll back unless the user explicitly asks. "
+        "Never update without a snapshot on your own: if the snapshot fails (e.g. the guest is being backed "
+        "up), report it and let the user decide."
     )
     if asks:
         instructions += (
@@ -68,7 +70,9 @@ def create_server(app: App) -> MCPServer:
             "report them to the user, especially major version jumps. 'held' = apt-mark hold, also skipped. "
             "auto_updates=true means the guest also installs updates by itself every day (unattended-upgrades) "
             "without a pvewarden snapshot; mention it to the user, it explains updates nobody asked for. "
-            "Without vmids, checks every running guest. Read-only."
+            "'lock' is a Proxmox lock on the guest (e.g. 'backup'): updates, snapshots and reboots wait until "
+            "it is gone. backup_running=true: a Proxmox backup runs on that node now, updates would be much "
+            "slower; suggest waiting until it is done. Without vmids, checks every running guest. Read-only."
         ),
     )
     async def check_updates(vmids: list[int] | None = None) -> list[dict]:
@@ -102,13 +106,38 @@ def create_server(app: App) -> MCPServer:
             "distribution's official archives are used: mode='security' installs security updates, "
             "mode='all' also regular updates. Third-party repositories and held packages are never "
             "installed; updates that would need them are skipped. No release upgrades. May auto-remove "
-            "unused old kernels. Takes a snapshot first by default and aborts if that fails. Does not "
-            "reboot. Report 'newly_failed_services' if not empty. Full output is in the file in 'log', a path "
-            "on the pvewarden server (its container), not on the Proxmox host or the guest."
+            "unused old kernels. Takes a snapshot first and aborts if that fails: then tell the user, do not "
+            "retry with snapshot=false on your own. snapshot=false "
+            + ("asks the user to confirm in the client. " if asks else "skips the snapshot. ")
+            + "Refused while Proxmox locks the guest (e.g. during a backup). Does not reboot. If the result "
+            "has still_running=true, the update goes on in the guest: call update_result. Report "
+            "'newly_failed_services' if not empty. Full output is in the file in 'log', a path on the "
+            "pvewarden server (its container), not on the Proxmox host or the guest."
         ),
     )
-    async def apply_updates(vmid: int, mode: Literal["security", "all"] = "security", snapshot: bool = True) -> dict:
+    async def apply_updates(
+        vmid: int, ctx: Context, mode: Literal["security", "all"] = "security", snapshot: bool = True
+    ) -> dict | InputRequiredResult:
+        g = await expose(app.update_plan(vmid, mode))
+        if not snapshot and app.pve is not None:  # without Proxmox there are no snapshots to skip
+            message = (
+                f"Install {mode} updates on {g.name} (VMID {vmid}) WITHOUT a snapshot? "
+                "If something breaks, there is no snapshot to roll back to."
+            )
+            asked = await expose(confirm(ctx, confirm_mode, message, f"nosnapshot:{vmid}:{mode}"))
+            if asked is not None:
+                return asked
         return await expose(app.apply_updates(vmid, mode, snapshot))
+
+    @mcp.tool(
+        annotations=READ_ONLY,
+        description=(
+            "Wait for an update that apply_updates reported as still_running and return its result, in "
+            "the same form as apply_updates (waits up to 30 minutes, then reports still_running again)."
+        ),
+    )
+    async def update_result(vmid: int) -> dict:
+        return await expose(app.update_result(vmid))
 
     @mcp.tool(
         annotations=DESTRUCTIVE,
