@@ -57,6 +57,8 @@ esac
       "ip -4 -o addr show dev eth0") echo "2: eth0    inet 192.0.2.50/24 brd 192.0.2.255 scope global eth0" ;;
       *python3*) echo "192.0.2.0/24" ;;
       "cat /etc/pvewarden/id_ed25519.pub") echo "$FAKE_PUBKEY" ;;
+      "/usr/local/bin/pvewarden token "*) echo "NEW-TOKEN-FOR-${@: -1}"; echo "noise on stderr" >&2 ;;
+      "test -f /etc/pvewarden/tls.crt") true ;;
       *fingerprint*) echo "sha256 Fingerprint=AA:BB:CC" ;;
     esac ;;
 esac
@@ -201,7 +203,7 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
     assert [str(n) for n in cfg.ssh.subnets] == ["192.0.2.0/24"]
     agent_token = cfg.http.clients["agent"]
     assert agent_token in r.stdout  # the agent token is shown once, at the end
-    assert "claude mcp add --transport http pvewarden https://192.0.2.50:8765/mcp" in r.stdout
+    assert "claude mcp add --scope user --transport http pvewarden https://192.0.2.50:8765/mcp" in r.stdout
     # pct exec has no /usr/local/bin in PATH: printed commands must use the full path
     assert "-- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor" in r.stdout
 
@@ -486,3 +488,26 @@ def test_interactive_ssh_keys_one_source_at_a_time_with_errors_shown(host, keys)
     summary = dialogs[dialogs.index("  SSH keys   ") + 2 :]  # the confirmation shows every fingerprint
     assert summary.startswith("SSH keys             3 key(s) from gh:alice")
     assert summary.count("(ED25519)") == 3
+
+
+def test_token_rotation(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    r = host.run("token", "--yes", PVEWARDEN_CLIENT="claude")
+    assert r.returncode == 0, r.stderr
+    calls = host.calls()
+    assert "pct exec 120 -- /usr/local/bin/pvewarden token claude" in calls
+    assert calls.index("pct exec 120 -- /usr/local/bin/pvewarden token claude") < calls.index(
+        "pct exec 120 -- systemctl restart pvewarden"
+    )
+    assert "NEW-TOKEN-FOR-claude" in r.stdout and "noise" not in r.stdout
+    assert "claude mcp remove --scope user pvewarden" in r.stdout
+    assert "https://192.0.2.50:8765/mcp" in r.stdout and 'Bearer NEW-TOKEN-FOR-claude"' in r.stdout
+
+
+@pytest.mark.parametrize("name", ["a b", "x;rm", "../x"])
+def test_token_rotation_rejects_odd_names(host, name):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    r = host.run("token", "--yes", PVEWARDEN_CLIENT=name)
+    assert r.returncode != 0 and not [c for c in host.calls() if "pvewarden token" in c]
