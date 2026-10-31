@@ -584,11 +584,11 @@ install_enroll_tool() {
 
 # client_instructions URL TOKEN USE_TLS: how to connect an MCP client
 client_instructions() {
+  # one line on purpose: works the same in bash, zsh, cmd and PowerShell
   cat <<EOF
- Claude Code:
-   claude mcp add --scope user --transport http pvewarden $1 \\
-     --header "Authorization: Bearer $2"
-$([ "$3" = yes ] && printf '   (trust the certificate first, e.g. NODE_EXTRA_CA_CERTS=./pvewarden.crt)\n')
+ Claude Code (one command, works in any shell):
+$([ "$3" = yes ] && printf '   Note: the client must trust the certificate first, e.g. NODE_EXTRA_CA_CERTS=./pvewarden.crt\n')
+   claude mcp add --scope user --transport http pvewarden $1 --header "Authorization: Bearer $2"
  Other MCP clients:
    { "mcpServers": { "pvewarden": { "type": "http", "url": "$1",
        "headers": { "Authorization": "Bearer $2" } } } }

@@ -503,6 +503,9 @@ def test_token_rotation(host):
     assert "NEW-TOKEN-FOR-claude" in r.stdout and "noise" not in r.stdout
     assert "claude mcp remove --scope user pvewarden" in r.stdout
     assert "https://192.0.2.50:8765/mcp" in r.stdout and 'Bearer NEW-TOKEN-FOR-claude"' in r.stdout
+    # one line, so it pastes into PowerShell/cmd too (no backslash continuation)
+    add = [line for line in r.stdout.splitlines() if "claude mcp add" in line]
+    assert len(add) == 1 and add[0].rstrip().endswith('Bearer NEW-TOKEN-FOR-claude"'), add
 
 
 @pytest.mark.parametrize("name", ["a b", "x;rm", "../x"])
