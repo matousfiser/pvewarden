@@ -56,6 +56,7 @@ async def test_check_updates_summary(app):
     assert [p["name"] for p in r["third_party_report_only"]] == ["docker-ce"]
     assert r["os"] == "Ubuntu 24.04.1 LTS"
     assert r["reboot_required"] is False
+    assert r["auto_updates"] is True
 
 
 async def test_check_updates_isolates_failing_guest(app):

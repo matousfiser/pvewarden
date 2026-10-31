@@ -354,8 +354,16 @@ def test_enroll_levels(host, level, tags):
     r = host.run("enroll", "--yes", PVEWARDEN_ENROLL="101 102", PVEWARDEN_LEVEL=level)
     assert r.returncode == 0, r.stderr
     (call,) = [c for c in host.calls() if c.startswith("ENROLL")]
-    expected = "ENROLL --pool" + (f" --tags {tags}" if tags else "") + " 101 102"
+    expected = "ENROLL --pool --auto-updates keep" + (f" --tags {tags}" if tags else "") + " 101 102"
     assert call == expected
+
+
+def test_enroll_can_turn_guest_auto_updates_off(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
+    r = host.run("enroll", "--yes", PVEWARDEN_ENROLL="101", PVEWARDEN_LEVEL="update", PVEWARDEN_AUTO_UPDATES="off")
+    assert r.returncode == 0, r.stderr
+    assert "ENROLL --pool --auto-updates off --tags pvewarden-update 101" in host.calls()
 
 
 def test_uninstall_removes_access_and_keeps_container_unless_asked(host):

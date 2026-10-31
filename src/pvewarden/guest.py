@@ -107,6 +107,8 @@ def parse_status(text: str) -> dict:
         else:
             st[key] = val
     st["reboot_required"] = st.get("reboot_required") == "yes"
+    # None: an older guest client that does not report it
+    st["auto_updates"] = {"yes": True, "no": False}.get(st.get("auto_updates", ""))
     return st
 
 

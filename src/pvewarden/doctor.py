@@ -232,7 +232,10 @@ async def check_guests(app: App) -> list[Result]:
             os_name = next((line[3:] for line in out.splitlines() if line.startswith("os=")), "?")
             d = app.describe(g)
             allowed = [name for name, on in (("update", d["may_update"]), ("reboot", d["may_reboot"])) if on]
-            result = ok(title, f"{address}, {os_name}, allowed: {', '.join(allowed) or 'read-only'}")
+            detail = f"{address}, {os_name}, allowed: {', '.join(allowed) or 'read-only'}"
+            if "auto_updates=yes" in out.splitlines():
+                detail += ", automatic updates on (no snapshots)"
+            result = ok(title, detail)
         result.raw = f"ssh {app.cfg.ssh.user}@{address} status -> exit {rc}\n{out.strip()}"
         return result
 

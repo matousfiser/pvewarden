@@ -75,3 +75,9 @@ def test_clean_tail_drops_dpkg_progress_noise():
     text = "Setting up git\n\n(Reading database ... \r(Reading database ... 5%\nRemoving old-kernel\nDone\n"
     assert clean_tail(text) == "Setting up git\nRemoving old-kernel\nDone"
     assert clean_tail("\n".join(str(i) for i in range(100)), lines=3) == "97\n98\n99"
+
+
+def test_status_auto_updates():
+    assert parse_status("auto_updates=yes\n")["auto_updates"] is True
+    assert parse_status("auto_updates=no\n")["auto_updates"] is False
+    assert parse_status("reboot_required=no\n")["auto_updates"] is None  # older guest client

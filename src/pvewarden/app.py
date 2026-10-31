@@ -138,6 +138,7 @@ class App:
                 "packages": pkgs,
                 "reboot_required": st["reboot_required"],
                 "reboot_pkgs": st["reboot_pkgs"],
+                "auto_updates": st["auto_updates"],
             }
 
         results = await asyncio.gather(*(one(g) for g in targets))

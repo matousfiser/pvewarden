@@ -67,6 +67,12 @@ async def test_status(guest):
     assert st["os"].split()[0] == guest["image"].split(":")[0].capitalize() and "kernel" in st
 
 
+async def test_status_reports_auto_updates(guest):
+    rc, out = await guest["runner"].run(guest["address"], "status", timeout=60)
+    assert rc == 0, out
+    assert parse_status(out)["auto_updates"] in (True, False), out
+
+
 async def test_services_runs_without_root(guest):
     rc, out = await guest["runner"].run(guest["address"], "services", timeout=60)
     assert rc == 0, out
@@ -144,16 +150,21 @@ async def test_upgrade_all_never_installs_third_party_packages(guest):
 def test_reinstall_is_idempotent_and_uninstall_cleans_up(guest):
     key = (guest["key"].with_suffix(".pub")).read_text().strip()
     gw = sh("docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}", guest["name"]).stdout
-    r = sh("docker", "exec", guest["name"], "/opt/pvewarden-guest/install.sh", key, gw.strip(), check=False)
+    r = sh(
+        "docker", "exec", guest["name"], "/opt/pvewarden-guest/install.sh", "--auto-updates=off", key, gw.strip(),
+        check=False,
+    )  # fmt: skip
     assert r.returncode == 0, r.stderr
-    assert raw_ssh(guest, "status").returncode == 0
+    assert "automatic updates: off" in r.stdout
+    status = raw_ssh(guest, "status")
+    assert status.returncode == 0 and "auto_updates=no" in status.stdout
 
     r = sh("docker", "exec", guest["name"], "/opt/pvewarden-guest/install.sh", "--uninstall", check=False)
     assert r.returncode == 0, r.stderr
     assert raw_ssh(guest, "status").returncode == 255  # key no longer accepted
     leftovers = sh(
         "docker", "exec", guest["name"], "sh", "-c",
-        "id pvewarden; ls /usr/local/sbin/pvewarden-* /etc/sudoers.d/pvewarden",
+        "id pvewarden; ls /usr/local/sbin/pvewarden-* /etc/sudoers.d/pvewarden /etc/apt/apt.conf.d/52pvewarden*",
         check=False,
     )  # fmt: skip
     assert leftovers.stdout.strip() == ""
