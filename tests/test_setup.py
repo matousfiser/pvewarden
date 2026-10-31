@@ -68,8 +68,14 @@ esac
 esac
 """,
     "whiptail": 'echo "whiptail must not be called with --yes" >&2; exit 1\n',
-    "curl": """url=${@: -1}
+    "curl": """url=${@: -1} out=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" = -o ] && out=${args[i+1]} && url=${args[i-1]}; done
 case "$url" in
+  https://github.com/*/releases/download/*)
+    f="$FAKE/release/${url##*/}"
+    [ -f "$f" ] || exit 22
+    cp "$f" "$out" ;;
   https://github.com/alice.keys) cat "$FAKE/alice.keys" ;;
   https://gitlab.com/empty.keys) ;;
   https://example.com/garbage) echo "<html>not a key</html>" ;;
@@ -149,7 +155,7 @@ def host(tmp_path, keys, pve_ca):
         admin_keys = keyfile
         state = tmp_path / "etc"
 
-        def run(self, *args, source=True, **env):
+        def run(self, *args, source=True, script=ROOT / "proxmox/pvewarden-setup", **env):
             full_env = {
                 "PATH": f"{bin_dir}:/usr/bin:/bin",
                 "FAKE": str(fake),
@@ -162,7 +168,7 @@ def host(tmp_path, keys, pve_ca):
                 **{k: str(v) for k, v in env.items()},
             }
             return subprocess.run(
-                ["bash", ROOT / "proxmox/pvewarden-setup", *args, *(["--source", str(ROOT)] if source else [])],
+                ["bash", script, *args, *(["--source", str(ROOT)] if source else [])],
                 env=full_env,
                 capture_output=True,
                 text=True,
@@ -681,3 +687,48 @@ def test_connect_repeats_the_steps_without_the_token(host):
     assert r.returncode == 0, r.stderr
     assert "URL      https://192.0.2.50:8765/mcp" in r.stdout and "<token:" in r.stdout
     assert hashlib.sha256((host.path / "pve/pve-root-ca.pem").read_bytes()).hexdigest() in r.stdout
+
+
+# --- installing from a release, as the README tells people to ------------------------------------
+
+
+def setup_version() -> str:
+    return re.search(r"^VERSION=(\S+)$", (ROOT / "proxmox/pvewarden-setup").read_text(), re.M).group(1)
+
+
+def test_versions_agree():
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    from pvewarden import __version__
+
+    assert setup_version() == pyproject == __version__
+
+
+@pytest.fixture
+def release(host, tmp_path):
+    """A release built like the release workflow does it, and pvewarden-setup alone in a directory."""
+    if not (ROOT / ".git").exists():
+        pytest.skip("not a git checkout")
+    version = setup_version()
+    rel = host.path / "fake/release"
+    rel.mkdir()
+    tarball = rel / f"pvewarden-{version}.tar.gz"
+    subprocess.run(["git", "-C", ROOT, "archive", "--format=tar.gz", "-o", tarball, "HEAD"], check=True)
+    digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
+    (rel / f"{tarball.name}.sha256").write_text(f"{digest}  {tarball.name}\n")
+    alone = tmp_path / "downloads"
+    alone.mkdir()
+    (alone / "pvewarden-setup").write_bytes((ROOT / "proxmox/pvewarden-setup").read_bytes())
+    return {"tarball": tarball, "script": alone / "pvewarden-setup", "version": version}
+
+
+def test_installs_the_downloaded_release(host, release):
+    r = host.run("install", "--yes", "--dry-run", source=False, script=release["script"], **INSTALL_ENV)
+    assert r.returncode == 0, r.stderr
+    url = f"https://github.com/matousfiser/pvewarden/releases/download/v{release['version']}/"
+    assert f"downloading {url}pvewarden-{release['version']}.tar.gz" in r.stdout
+
+
+def test_refuses_a_tampered_release(host, release):
+    release["tarball"].write_bytes(release["tarball"].read_bytes() + b"x")
+    r = host.run("install", "--yes", "--dry-run", source=False, script=release["script"], **INSTALL_ENV)
+    assert r.returncode != 0 and "checksum mismatch" in r.stderr

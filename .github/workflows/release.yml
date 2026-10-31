@@ -1,0 +1,49 @@
+name: Release
+
+# Push a tag vX.Y.Z whose version matches pyproject.toml, pvewarden-setup and CHANGELOG.md.
+# The release gets: the source tarball pvewarden-setup installs from (+ its .sha256),
+# pvewarden-setup itself and SHA256SUMS over both.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tag matches the version
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          grep -qx "version = \"$v\"" pyproject.toml || { echo "::error::pyproject.toml is not $v"; exit 1; }
+          grep -qx "VERSION=$v" proxmox/pvewarden-setup || { echo "::error::pvewarden-setup is not $v"; exit 1; }
+          grep -q "^## $v " CHANGELOG.md || { echo "::error::CHANGELOG.md has no '## $v' section"; exit 1; }
+      - name: Build assets
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          mkdir dist
+          git archive --format=tar.gz -o "dist/pvewarden-$v.tar.gz" HEAD
+          cp proxmox/pvewarden-setup dist/
+          cd dist
+          sha256sum "pvewarden-$v.tar.gz" > "pvewarden-$v.tar.gz.sha256"
+          sha256sum "pvewarden-$v.tar.gz" pvewarden-setup > SHA256SUMS
+      - name: Release notes from CHANGELOG.md
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          awk -v v="$v" '$0 ~ "^## " v " " {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          test -s notes.md
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "pvewarden ${GITHUB_REF_NAME#v}" --notes-file notes.md
