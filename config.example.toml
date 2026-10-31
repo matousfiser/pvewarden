@@ -41,6 +41,9 @@ port = 8765
 # HTTPS: recommended whenever the network between agent and server is not already encrypted (VPN)
 # tls_cert = "/etc/pvewarden/tls.crt"
 # tls_key = "/etc/pvewarden/tls.key"
+# The CA that signed tls_cert. Public; served without a token at /ca.pem, so clients can fetch it
+# and check its SHA-256 instead of copying it (pvewarden-setup prints the command).
+# tls_ca = "/etc/pvewarden/tls-ca.pem"
 
 [http.clients]
 # name = "token" (at least 32 characters); the name is written to the audit log.

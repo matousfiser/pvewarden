@@ -56,6 +56,9 @@ class HTTPConfig:
     hostnames: tuple[str, ...] = ()
     tls_cert: Path | None = None
     tls_key: Path | None = None
+    # the CA clients should trust (public); served without a token at /ca.pem so a client can
+    # fetch it and check its fingerprint instead of copying files around
+    tls_ca: Path | None = None
 
     @property
     def scheme(self) -> str:
@@ -135,13 +138,17 @@ def parse(data: dict) -> Config:
 
     http = None
     if "http" in data:
-        h = _section(data, "http", {"listen", "port", "clients", "hostnames", "tls_cert", "tls_key"}, {"listen"})
+        h = _section(
+            data, "http", {"listen", "port", "clients", "hostnames", "tls_cert", "tls_key", "tls_ca"}, {"listen"}
+        )
         clients = h.get("clients", {})
         weak = [name for name, token in clients.items() if len(token) < 32 or token == PLACEHOLDER]
         if weak:
             raise ConfigError(f"[http.clients] tokens must be at least 32 characters: {weak}")
         if ("tls_cert" in h) != ("tls_key" in h):
             raise ConfigError("[http] set both tls_cert and tls_key, or neither")
+        if "tls_ca" in h and "tls_cert" not in h:
+            raise ConfigError("[http] tls_ca needs tls_cert and tls_key")
         http = HTTPConfig(
             listen=h["listen"],
             port=int(h.get("port", 8765)),
@@ -149,6 +156,7 @@ def parse(data: dict) -> Config:
             hostnames=tuple(h.get("hostnames", [])),
             tls_cert=Path(h["tls_cert"]) if "tls_cert" in h else None,
             tls_key=Path(h["tls_key"]) if "tls_key" in h else None,
+            tls_ca=Path(h["tls_ca"]) if "tls_ca" in h else None,
         )
 
     addresses = {int(k): v for k, v in data.get("addresses", {}).items()}

@@ -1,5 +1,6 @@
 """pvewarden-setup against a fake Proxmox host: every pct/pvesh/pveum/pveam call is stubbed and logged."""
 
+import hashlib
 import re
 import subprocess
 import tomllib
@@ -61,6 +62,7 @@ esac
       "/usr/local/bin/pvewarden token "*) sleep "${FAKE_DELAY:-0}"; echo "NEW-TOKEN-FOR-${@: -1}"; echo "noise on stderr" >&2 ;;
       "test -f /etc/pvewarden/tls.crt") [ -z "$FAKE_NO_TLS" ] ;;
       "cat /etc/pvewarden/tls.crt") cat "$FAKE/pushed/_etc_pvewarden_tls.crt" 2>/dev/null ;;
+      "cat /etc/pvewarden/tls-ca.pem") cat "$FAKE/pushed/_etc_pvewarden_tls-ca.pem" 2>/dev/null ;;
       *fingerprint*) echo "sha256 Fingerprint=AA:BB:CC" ;;
     esac ;;
 esac
@@ -225,9 +227,14 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
     script = (ROOT / "proxmox/pvewarden-setup").read_text()
     assert "runuser -u pvewarden -- pvewarden" not in script
 
-    # the summary: numbered steps, the Proxmox CA to trust once, the guests
-    assert "1) Trust the Proxmox CA" in r.stdout and "scp root@192.0.2.1:/etc/pve/pve-root-ca.pem ." in r.stdout
-    assert "3) Restart claude" in r.stdout and "Checks     all OK" in r.stdout
+    # the summary: generic MCP connection data, then numbered steps
+    assert "URL      https://192.0.2.50:8765/mcp" in r.stdout
+    assert f"Header   Authorization: Bearer {agent_token}" in r.stdout
+    assert "curl.exe -sk https://192.0.2.50:8765/ca.pem" in r.stdout
+    ca_hash = hashlib.sha256((host.path / "pve/pve-root-ca.pem").read_bytes()).hexdigest()
+    assert ca_hash in r.stdout  # the fingerprint the paste-ready commands check
+    assert "3) Restart the agent" in r.stdout and "Checks     all OK" in r.stdout
+    assert 'tls_ca = "/etc/pvewarden/tls-ca.pem"' in config
 
     # the TLS certificate: signed by the Proxmox CA, for the server's address, key made in the container
     cert = host.pushed / "_etc_pvewarden_tls.crt"
@@ -626,3 +633,51 @@ def test_renew_cert_refuses_plain_http(host):
     (host.state / "setup.conf").write_text("CTID=120\nLISTEN=10.0.0.5\n")
     r = host.run("renew-cert", "--yes", FAKE_NO_TLS=1)
     assert r.returncode == 1 and "plain HTTP" in r.stderr
+
+
+def linux_trust_command(stdout: str) -> str:
+    lines = stdout.splitlines()
+    return lines[lines.index("      Linux / macOS:") + 1].strip()
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_the_printed_trust_command_checks_the_fingerprint(host, tmp_path, tampered):
+    r = host.run("install", "--yes", **INSTALL_ENV)
+    assert r.returncode == 0, r.stderr
+    served = tmp_path / "served.pem"  # what the server's /ca.pem returns
+    served.write_bytes((host.pushed / "_etc_pvewarden_tls-ca.pem").read_bytes() + (b"x" if tampered else b""))
+    command = linux_trust_command(r.stdout).replace("https://192.0.2.50:8765/ca.pem", f"file://{served}")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".bashrc").write_text("# mine\n")
+    run = subprocess.run(["bash", "-c", command], env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+                         capture_output=True, text=True)  # fmt: skip
+    if tampered:
+        assert "WRONG CERTIFICATE" in run.stdout
+        assert not (home / "pvewarden-ca.pem").exists() and "NODE_EXTRA" not in (home / ".bashrc").read_text()
+    else:
+        assert "OK - open a new terminal" in run.stdout, run.stdout + run.stderr
+        assert f"export NODE_EXTRA_CA_CERTS={home}/pvewarden-ca.pem" in (home / ".bashrc").read_text()
+        subprocess.run(["bash", "-c", command], env={"HOME": str(home), "PATH": "/usr/bin:/bin"}, check=True)
+        assert (home / ".bashrc").read_text().count("NODE_EXTRA_CA_CERTS") == 1  # idempotent
+
+
+def test_trust_command_leaves_a_foreign_node_extra_ca_certs_alone(host, tmp_path):
+    r = host.run("install", "--yes", **INSTALL_ENV)
+    command = linux_trust_command(r.stdout).replace(
+        "https://192.0.2.50:8765/ca.pem", f"file://{host.pushed / '_etc_pvewarden_tls-ca.pem'}"
+    )
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "NODE_EXTRA_CA_CERTS": "/etc/corp-ca.pem"}
+    run = subprocess.run(["bash", "-c", command], env=env, capture_output=True, text=True)
+    assert "NODE_EXTRA_CA_CERTS is in use: add" in run.stdout
+
+
+def test_connect_repeats_the_steps_without_the_token(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
+    host.pushed.mkdir(parents=True)
+    (host.pushed / "_etc_pvewarden_tls-ca.pem").write_bytes((host.path / "pve/pve-root-ca.pem").read_bytes())
+    r = host.run("connect")
+    assert r.returncode == 0, r.stderr
+    assert "URL      https://192.0.2.50:8765/mcp" in r.stdout and "<token:" in r.stdout
+    assert hashlib.sha256((host.path / "pve/pve-root-ca.pem").read_bytes()).hexdigest() in r.stdout
