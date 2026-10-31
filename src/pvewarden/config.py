@@ -42,8 +42,9 @@ CONFIRM_MODES = ("required", "if-supported", "off")
 class PolicyConfig:
     tag_update: str = "pvewarden-update"
     tag_reboot: str = "pvewarden-reboot"
-    # rollback and snapshot deletion: "required" = the user must confirm in the MCP client (refused if
-    # the client cannot ask), "if-supported" = ask when the client can, "off" = never ask
+    # rollback, snapshot deletion, updates without a snapshot: "required" = the user must confirm in
+    # the MCP client (refused if the client cannot ask), "if-supported" = ask when the client can,
+    # "off" = never ask
     confirm_destructive: str = "required"
 
 
