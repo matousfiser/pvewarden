@@ -37,8 +37,8 @@ def gate(tmp_path):
     return run
 
 
-@pytest.mark.parametrize("cmd", ["check", "status", "upgrade-security", "upgrade-all"])
-def test_gate_allows_the_four_root_commands(gate, cmd):
+@pytest.mark.parametrize("cmd", ["check", "status", "upgrade-security", "upgrade-all", "upgrade-follow"])
+def test_gate_allows_the_root_commands(gate, cmd):
     r = gate(cmd)
     assert r.returncode == 0
     assert r.stdout.strip() == f"SUDO -n /usr/local/sbin/pvewarden-guest {cmd}"
@@ -52,7 +52,20 @@ def test_gate_services_without_root(gate):
 
 @pytest.mark.parametrize(
     "cmd",
-    [None, "", "id", "check; id", "check && id", "check id", "check\nid", "$(id)", "upgrade-all --force", " check"],
+    [
+        None,
+        "",
+        "id",
+        "check; id",
+        "check && id",
+        "check id",
+        "check\nid",
+        "$(id)",
+        "upgrade-all --force",
+        " check",
+        "run upgrade-all",
+        "now-upgrade-all",
+    ],
 )
 def test_gate_refuses_everything_else(gate, cmd):
     r = gate(cmd)

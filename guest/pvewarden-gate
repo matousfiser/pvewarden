@@ -2,7 +2,7 @@
 # /usr/local/sbin/pvewarden-gate — forced command for the pvewarden SSH key.
 # Whatever the client asks for, only these exact words are accepted.
 case "${SSH_ORIGINAL_COMMAND:-}" in
-  check|status|upgrade-security|upgrade-all)
+  check|status|upgrade-security|upgrade-all|upgrade-follow)
     exec sudo -n /usr/local/sbin/pvewarden-guest "$SSH_ORIGINAL_COMMAND"
     ;;
   services)

@@ -19,6 +19,7 @@ class Guest:
     node: str | None
     status: str
     tags: tuple[str, ...]
+    lock: str | None = None  # Proxmox config lock, e.g. "backup" while vzdump runs
 
     @property
     def api_path(self) -> str:
@@ -92,6 +93,7 @@ class ProxmoxClient:
                     node=r["node"],
                     status=r["status"],
                     tags=split_tags(r.get("tags", "")),
+                    lock=r.get("lock") or None,
                 )
             )
         return out

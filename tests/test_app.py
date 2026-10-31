@@ -1,9 +1,18 @@
+from dataclasses import replace
+
 import pytest
 from conftest import RBT, UPD, FakeRunner
 
 from pvewarden.app import SNAPSHOT_PREFIX, App
 from pvewarden.config import parse
-from pvewarden.errors import GuestError, InvalidRequestError, NotFoundError, PolicyError, ProxmoxError
+from pvewarden.errors import (
+    GuestError,
+    GuestTimeoutError,
+    InvalidRequestError,
+    NotFoundError,
+    PolicyError,
+    ProxmoxError,
+)
 
 # --- inventory, permissions, addresses -----------------------------------------------------
 
@@ -217,3 +226,89 @@ async def test_static_mode_has_no_proxmox_operations(static_app):
     for op in (static_app.apply_updates(1), static_app.reboot(1), static_app.list_snapshots(1)):
         with pytest.raises(ProxmoxError, match="not configured"):
             await op
+
+
+# --- Proxmox locks (backups) -------------------------------------------------------------------
+
+
+def lock(app, vmid, what="backup"):
+    app.pve._guests[vmid] = replace(app.pve._guests[vmid], lock=what)
+
+
+async def test_locked_guest_is_left_alone(app):
+    lock(app, 101)
+    app.pve.snaps[101] = [{"name": SNAPSHOT_PREFIX + "x", "snaptime": 1}]
+    for op in (app.apply_updates(101), app.snapshot(101), app.reboot(101), app.rollback(101, SNAPSHOT_PREFIX + "x")):
+        with pytest.raises(GuestError, match="backed up by Proxmox right now.*Do not skip the snapshot"):
+            await op
+    assert app.runner.calls == [] and app.pve.events == []
+    lock(app, 101, "migrate")
+    with pytest.raises(GuestError, match="lock 'migrate'"):
+        await app.apply_updates(101)
+
+
+async def test_snapshot_refused_by_a_backup_that_just_started(app):
+    async def locked(*args):
+        raise ProxmoxError("task UPID:...:vzsnapshot:101: failed: CT is locked (backup)")
+
+    app.pve.create_snapshot = locked
+    with pytest.raises(GuestError, match="being backed up"):
+        await app.apply_updates(101)
+    assert app.runner.calls == []
+
+
+async def test_failed_snapshot_says_not_to_skip_it(app):
+    app.pve.fail_snapshot = True
+    with pytest.raises(ProxmoxError, match="do not retry without a snapshot"):
+        await app.apply_updates(101)
+
+
+async def test_check_updates_reports_locks_and_running_backups(app):
+    lock(app, 103)  # the backup job is copying 103; 101 and 102 are on the same node
+    results = {r["vmid"]: r for r in await app.check_updates([101, 103])}
+    assert results[103]["lock"] == "backup" and results[103]["backup_running"] is True
+    assert "lock" not in results[101] and results[101]["backup_running"] is True
+    app.pve._guests[103] = replace(app.pve._guests[103], lock=None)
+    assert "backup_running" not in (await app.check_updates([101]))[0]
+
+
+# --- updates that outlast the wait ---------------------------------------------------------------
+
+
+def slow_upgrade(addr):
+    raise GuestTimeoutError("upgrade-security on 192.0.2.11: no result after 1800s")
+
+
+async def test_update_keeps_running_and_is_picked_up_later(app):
+    app.runner.responses["upgrade-security"] = slow_upgrade
+    res = await app.apply_updates(101)
+    assert res["still_running"] is True and res["ok"] is None and res["snapshot"]
+    assert "update_result" in res["hint"]
+    # meanwhile: no second update, no reboot, no rollback
+    for op in (app.apply_updates(101), app.reboot(101), app.rollback(101, res["snapshot"])):
+        with pytest.raises(GuestError, match="still running"):
+            await op
+
+    app.runner.responses["upgrade-follow"] = (0, "Setting up openssl ...\nAll upgrades installed\n")
+    done = await app.update_result(101)
+    assert done["ok"] is True and done["snapshot"] == res["snapshot"] and done["newly_failed_services"] == []
+    assert "All upgrades installed" in (app.runs_dir / done["log"].rsplit("/", 1)[1]).read_text()
+    with pytest.raises(InvalidRequestError, match="nothing to wait for"):
+        await app.update_result(101)
+    await app.apply_updates(101)  # free again
+
+
+async def test_update_result_with_an_old_guest_client(app):
+    app.runner.responses["upgrade-security"] = slow_upgrade
+    await app.apply_updates(101)
+    app.runner.responses["upgrade-follow"] = (1, "pvewarden: command not allowed\n")
+    with pytest.raises(GuestError, match="older"):
+        await app.update_result(101)
+    assert not app.pending_dir.joinpath("101.json").exists()
+
+
+async def test_update_already_running_on_the_guest(app):
+    app.runner.responses["upgrade-security"] = (75, "pvewarden: an update is already running on this guest\n")
+    with pytest.raises(GuestError, match="already running"):
+        await app.apply_updates(101)
+    assert not app.pending_dir.joinpath("101.json").exists()

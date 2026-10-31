@@ -10,9 +10,9 @@ import re
 from pathlib import Path
 
 from pvewarden.config import SSHConfig
-from pvewarden.errors import GuestError
+from pvewarden.errors import GuestTimeoutError
 
-COMMANDS = frozenset({"check", "status", "services", "upgrade-security", "upgrade-all"})
+COMMANDS = frozenset({"check", "status", "services", "upgrade-security", "upgrade-all", "upgrade-follow"})
 
 
 class GuestRunner:
@@ -34,8 +34,12 @@ class GuestRunner:
             command,
         ]  # fmt: skip
 
-    async def run(self, address: str, command: str, timeout: int = 1800, log: Path | None = None) -> tuple[int, str]:
-        """Run an allowed command; stream output into `log` as it arrives if given."""
+    async def run(
+        self, address: str, command: str, timeout: int = 1800, log: Path | None = None, log_mode: str = "a"
+    ) -> tuple[int, str]:
+        """Run an allowed command; stream output into `log` as it arrives if given.
+
+        On timeout only the local SSH client is stopped. Updates run detached on the guest and go on."""
         if command not in COMMANDS:
             raise ValueError(f"unknown guest command {command!r}")
         async with self._slots:
@@ -48,7 +52,7 @@ class GuestRunner:
             chunks: list[str] = []
 
             async def pump() -> None:
-                with open(log, "a") if log else contextlib.nullcontext() as f:
+                with open(log, log_mode) if log else contextlib.nullcontext() as f:
                     async for raw in proc.stdout:
                         line = raw.decode(errors="replace")
                         chunks.append(line)
@@ -61,7 +65,7 @@ class GuestRunner:
                 await asyncio.wait_for(pump(), timeout)
             except TimeoutError:
                 proc.kill()
-                raise GuestError(f"{command} on {address} timed out after {timeout}s") from None
+                raise GuestTimeoutError(f"{command} on {address}: no result after {timeout}s") from None
         return proc.returncode, "".join(chunks)
 
 

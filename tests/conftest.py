@@ -35,7 +35,7 @@ class FakeRunner:
             "upgrade-all": (0, "All upgrades installed\n"),
         }
 
-    async def run(self, address, command, timeout=1800, log: Path | None = None):
+    async def run(self, address, command, timeout=1800, log: Path | None = None, log_mode="a"):
         self.calls.append((address, command))
         resp = self.responses[command]
         rc, out = resp(address) if callable(resp) else resp

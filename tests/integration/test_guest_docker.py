@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from pvewarden.config import SSHConfig
+from pvewarden.errors import GuestTimeoutError
 from pvewarden.guest import GuestRunner, parse_services, parse_status, parse_upgradable
 
 pytestmark = pytest.mark.integration
@@ -99,12 +100,12 @@ def test_no_shell_no_tunnel(guest):
     assert raw_ssh(guest, options=["-W", "127.0.0.1:22"]).returncode != 0
 
 
-def test_sudo_allows_only_the_four_commands(guest):
+def test_sudo_allows_only_the_five_commands(guest):
     r = sh("docker", "exec", "-u", "pvewarden", guest["name"], "sudo", "-n", "id", check=False)
     assert r.returncode != 0
     r = sh("docker", "exec", "-u", "pvewarden", guest["name"], "sudo", "-n", "-l", check=False)
     allowed = [line.strip() for line in r.stdout.splitlines() if "pvewarden-guest" in line]
-    assert len(allowed) == 1 and allowed[0].count("/usr/local/sbin/pvewarden-guest") == 4
+    assert len(allowed) == 1 and allowed[0].count("/usr/local/sbin/pvewarden-guest") == 5
 
 
 # A third-party repository that names its suite after the distribution, like Docker's does.
@@ -146,6 +147,36 @@ async def test_upgrade_all_never_installs_third_party_packages(guest):
     assert official_left == [], f"official updates not installed: {official_left}"
 
 
+# An update must survive the SSH connection: dpkg cut off halfway can leave the guest broken.
+SLOW_UPGRADE = r"""
+set -e
+cp /usr/local/sbin/pvewarden-guest /root/pvewarden-guest.orig
+# make the real work slow, keep everything else as it is
+sed -i 's|^  now-upgrade-security)$|  now-upgrade-security)\n    echo started; sleep 6; echo finished-slowly|' /usr/local/sbin/pvewarden-guest
+"""
+
+
+async def test_update_goes_on_when_the_connection_drops_and_can_be_followed(guest):
+    setup = sh("docker", "exec", guest["name"], "bash", "-c", SLOW_UPGRADE, check=False)
+    assert setup.returncode == 0, setup.stderr
+    try:
+        with pytest.raises(GuestTimeoutError):
+            await guest["runner"].run(guest["address"], "upgrade-security", timeout=2)  # SSH client killed
+
+        # still running on the guest: a second update is refused, following it waits for the end
+        rc, out = await guest["runner"].run(guest["address"], "upgrade-security", timeout=60)
+        assert rc == 75 and "already running" in out
+        rc, out = await guest["runner"].run(guest["address"], "upgrade-follow", timeout=300)
+        assert rc == 0, out[-2000:]
+        assert out.startswith("started") and "finished-slowly" in out
+
+        # afterwards follow reports the finished run again
+        rc, again = await guest["runner"].run(guest["address"], "upgrade-follow", timeout=60)
+        assert rc == 0 and "finished-slowly" in again
+    finally:
+        sh("docker", "exec", guest["name"], "cp", "/root/pvewarden-guest.orig", "/usr/local/sbin/pvewarden-guest")
+
+
 # must stay last: it removes the client from the shared container
 def test_reinstall_is_idempotent_and_uninstall_cleans_up(guest):
     key = (guest["key"].with_suffix(".pub")).read_text().strip()
@@ -164,7 +195,7 @@ def test_reinstall_is_idempotent_and_uninstall_cleans_up(guest):
     assert raw_ssh(guest, "status").returncode == 255  # key no longer accepted
     leftovers = sh(
         "docker", "exec", guest["name"], "sh", "-c",
-        "id pvewarden; ls /usr/local/sbin/pvewarden-* /etc/sudoers.d/pvewarden /etc/apt/apt.conf.d/52pvewarden*",
+        "id pvewarden; ls -d /usr/local/sbin/pvewarden-* /etc/sudoers.d/pvewarden /etc/apt/apt.conf.d/52pvewarden* /var/lib/pvewarden",
         check=False,
     )  # fmt: skip
     assert leftovers.stdout.strip() == ""
