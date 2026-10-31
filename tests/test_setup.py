@@ -130,7 +130,7 @@ def host(tmp_path, keys):
         admin_keys = keyfile
         state = tmp_path / "etc"
 
-        def run(self, *args, **env):
+        def run(self, *args, source=True, **env):
             full_env = {
                 "PATH": f"{bin_dir}:/usr/bin:/bin",
                 "FAKE": str(fake),
@@ -143,7 +143,7 @@ def host(tmp_path, keys):
                 **{k: str(v) for k, v in env.items()},
             }
             return subprocess.run(
-                ["bash", ROOT / "proxmox/pvewarden-setup", *args, "--source", str(ROOT)],
+                ["bash", ROOT / "proxmox/pvewarden-setup", *args, *(["--source", str(ROOT)] if source else [])],
                 env=full_env,
                 capture_output=True,
                 text=True,
@@ -532,3 +532,12 @@ def test_slow_steps_show_signs_of_life(host):
     assert r.returncode == 0, r.stderr
     assert "... still working (2s)" in r.stderr
     assert "still working" not in r.stdout and "NEW-TOKEN-FOR-claude" in r.stdout
+
+
+def test_runs_from_a_git_checkout_without_source(host):
+    if not (ROOT / ".git").exists():
+        pytest.skip("not a git checkout")
+    r = host.run("install", "--yes", "--dry-run", source=False, **INSTALL_ENV)
+    assert r.returncode == 0, r.stderr
+    assert f"using the source tree this script runs from: {ROOT}" in r.stdout
+    assert "releases/download" not in r.stdout
