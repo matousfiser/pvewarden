@@ -8,6 +8,9 @@ In the server container (`pct enter <ctid>` on the host):
 runuser -u pvewarden -- pvewarden doctor        # add -v to see what each check saw
 ```
 
+Or from the host, with the full path (`pct exec` has no `/usr/local/bin` in `PATH`):
+`pct exec <ctid> -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor`
+
 It checks the config, the Proxmox API and the token's privileges (too few *and* too many). Then it
 connects over SSH to every guest in the pool. Every failure comes with a hint. `pvewarden-setup`
 runs the same check at the end of the install.
@@ -41,10 +44,7 @@ not know. Use the address from the summary, or add the name to `[http] hostnames
 
 **Connection refused or timeout:**
 - Is the service running? Check `systemctl status pvewarden` in the container.
-- Did the container's address change? The server listens on the address it had at install time. If
-  DHCP gave it a new one, check `ip -4 addr` in the container, then either restore the old address
-  (DHCP reservation) or set `[http] listen` to the new one, run `pvewarden-setup renew-cert` and
-  restart.
+- Did the container's address change? See [The server's address changed](#the-servers-address-changed).
 - Firewall: the agent must reach TCP 8765.
 
 ## Guests
@@ -69,8 +69,9 @@ a time. Wait for the other one (often an update) to finish.
 stopped halfway. Enroll it again: `pvewarden-enroll <vmid>`.
 
 **SSH "Permission denied":** the guest's client is missing, it accepts the key only from another
-address (`from=` in `~pvewarden/.ssh/authorized_keys`, e.g. after the server's address changed), or
-it has a different key than the server. Re-enroll the guest.
+address (`from=` in `~pvewarden/.ssh/authorized_keys`, see
+[The server's address changed](#the-servers-address-changed)), or it has a different key than the
+server. Re-enroll the guest.
 
 **"the guest's host key changed":** expected after reinstalling the guest. In the server container:
 `ssh-keygen -R pvewarden-vmid-<vmid> -f /var/lib/pvewarden/known_hosts`
@@ -82,6 +83,34 @@ it has a different key than the server. Re-enroll the guest.
 network.
 
 **"runs an outdated pvewarden client":** re-enroll the guest (`pvewarden-enroll --all` refreshes all).
+
+## The server's address changed
+
+The server's address is written in four places. A container that gets its address by DHCP can get a
+new one after a restart (Hyper-V's Default Switch does it every time), and then the service does not
+start ("Listen address … is not an address of this machine" in `doctor`) and guests refuse it
+(`pvewarden-enroll` says "the server's address has changed").
+
+Best: give the container a fixed address or a DHCP reservation and keep the old one. Otherwise,
+on the Proxmox host as root (`OLD`/`NEW` are the old and new address, `103` the server container):
+
+```
+OLD=192.0.2.10 NEW=192.0.2.20 CT=103
+# the host's records: what guests accept (FROM) and what the setup uses (LISTEN, CT_IP)
+sed -i "s/$OLD/$NEW/g" /etc/pvewarden/enroll.conf /etc/pvewarden/setup.conf
+# the server's listen address
+pct exec $CT -- sed -i "s/$OLD/$NEW/" /etc/pvewarden/config.toml
+# a certificate for the new address
+pvewarden-setup renew-cert
+pct exec $CT -- systemctl restart pvewarden
+# guests: accept the server from the new address (also rotates their keys)
+pvewarden-enroll --all
+# the new URL for your agents (the token stays the same)
+pvewarden-setup connect
+```
+
+`pct exec` runs commands without `/usr/local/bin` in `PATH`; call the server as
+`pct exec $CT -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor`.
 
 ## Updates
 

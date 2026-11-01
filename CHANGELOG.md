@@ -66,6 +66,8 @@
   privileges and `uninstall` deleted such objects. `uninstall` now deletes only what the installer
   created or took over (`/etc/pvewarden/owned.conf`); upgrades record the objects of older installs.
 - When a step fails, `pvewarden-setup` says so instead of stopping without a word.
+- When a guest refuses the server's new key because the server's address changed (DHCP),
+  `pvewarden-enroll` says so; docs/troubleshooting.md has the steps to move to a new address.
 
 ## 0.1.1 (2026-11-01)
 

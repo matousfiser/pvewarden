@@ -21,7 +21,8 @@ nainstaluje lokální kopii místo stažení vydání.
 
 - **Proxmox VE 8 nebo 9.** V clusteru spusť skript na jednom nodu, kontejner bude tam.
 - **Pevná adresa serveru.** Agenti se k ní připojují a certifikát je vystavený na ni. V průvodci
-  zadej statickou IP, nebo adresu zarezervuj v DHCP.
+  zadej statickou IP, nebo adresu zarezervuj v DHCP. Hosté server přijmou jen z této adresy. Když se
+  přesto změní, postup je v [troubleshooting.md](../troubleshooting.md#the-servers-address-changed).
 - **Hosté:** Debian 12/13 nebo Ubuntu 22.04 a novější, zapnutí a s přístupem k zrcadlům balíků. VM
   potřebují nainstalovaný `qemu-guest-agent` a zapnutou volbu *QEMU Guest Agent* v Proxmoxu.
 - **Úložiště:** před aktualizací se dělá snapshot, takže disky hostů musí být na úložišti se

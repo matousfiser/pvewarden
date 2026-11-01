@@ -168,6 +168,21 @@ slow() {
   return "$rc"
 }
 
+# explain_refused_key: the usual reason a guest refuses the new key is that the server's address
+# changed (DHCP) while the guests still accept it only from FROM. Say so if that is the case.
+explain_refused_key() {
+  local addrs
+  [ -n "${SERVER_CT:-}" ] || return 0
+  [[ $FROM =~ ^[0-9]+(\.[0-9]+){3}$ ]] || return 0 # a network or a list: cannot compare
+  addrs=$(pct exec "$SERVER_CT" -- ip -4 -o addr show scope global 2>/dev/null | awk '{sub(/\/.*/, "", $4); print $4}') || return 0
+  [ -n "$addrs" ] || return 0
+  grep -qxF "$FROM" <<<"$addrs" && return 0
+  echo "the server's address has changed: guests accept the server only from FROM=$FROM ($CONF)," \
+    "but container $SERVER_CT now has $(echo "$addrs" | paste -sd' ')." >&2
+  echo "  Give the server a fixed address (or a DHCP reservation), then see 'The server's address changed'" \
+    "in docs/troubleshooting.md." >&2
+}
+
 # enroll_one VMID TYPE: install the client and switch the guest to its own key (see the top)
 enroll_one() {
   local id=$1 type=$2 pub
@@ -186,6 +201,7 @@ enroll_one() {
   if [ "$DO_POOL" = 1 ]; then add_to_pool "$id" || return 1; fi
   server key verify "$id" || {
     echo "the server cannot log in to $id with its new key: nothing was switched (is $id in pool $POOL?)" >&2
+    explain_refused_key
     return 1
   }
   "run_$type" "$id" --keys-only "$pub" "$FROM" || {

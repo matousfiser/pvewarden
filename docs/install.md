@@ -21,7 +21,9 @@ local copy instead of downloading the release.
 
 - **Proxmox VE 8 or 9.** In a cluster, run the script on one node; the container lives there.
 - **A fixed address for the server.** Agents connect to it and the certificate is issued for it.
-  Choose a static IP in the wizard or reserve the DHCP address in your router.
+  Choose a static IP in the wizard or reserve the DHCP address in your router. Guests accept the
+  server only from that address. If it changes anyway, see
+  [The server's address changed](troubleshooting.md#the-servers-address-changed).
 - **Guests:** Debian 12/13 or Ubuntu 22.04 and newer, running, with network access to their package
   mirrors. VMs need `qemu-guest-agent` installed and the *QEMU Guest Agent* option enabled in
   Proxmox. pvewarden uses it to install its client and to find the VM's address.

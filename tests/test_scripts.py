@@ -141,6 +141,9 @@ def enroll(tmp_path):
   exec)
     if [ "$2" = 120 ]; then
       shift 3
+      if [ "$*" = "ip -4 -o addr show scope global" ]; then
+        echo "2: eth0    inet ${SERVER_IP:-192.0.2.10}/24 brd 192.0.2.255 scope global eth0"; exit 0
+      fi
       [ "$*" = "runuser -u pvewarden -- /usr/local/bin/pvewarden key ${*: -2}" ] || { echo "bad server call: $*" >&2; exit 9; }
       action=${*: -2:1}
       echo "SERVER key $action ${*: -1}" >> "$LOG"
@@ -228,6 +231,24 @@ def test_enroll_stops_at_a_failed_step_and_never_switches_halfway(enroll, fail_a
     assert "SET " not in r.stdout  # no tags for a guest that did not finish
     if fail_at == "activate":
         assert "run pvewarden-enroll 201 again" in r.stderr
+
+
+def test_a_changed_server_address_is_named_when_the_key_is_refused(enroll):
+    r = enroll("201", FAIL_AT="verify", SERVER_IP="192.0.2.77")
+    assert r.returncode == 1
+    assert "server's address has changed" in r.stderr and "FROM=192.0.2.10" in r.stderr
+    assert "container 120 now has 192.0.2.77" in r.stderr
+
+
+def test_an_unchanged_address_is_not_blamed(enroll):
+    r = enroll("201", FAIL_AT="verify")
+    assert r.returncode == 1 and "address has changed" not in r.stderr
+
+
+def test_a_network_in_from_is_not_compared(enroll):
+    enroll.conf.write_text('SERVER_CT=120\nFROM="192.0.2.0/24"\n')
+    r = enroll("201", FAIL_AT="verify", SERVER_IP="198.51.100.7")
+    assert r.returncode == 1 and "address has changed" not in r.stderr
 
 
 def test_enroll_continues_after_failures(enroll):
