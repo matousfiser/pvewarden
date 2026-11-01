@@ -43,7 +43,7 @@ esac
 """,
     "pveum": """case "$1 $2" in
   "role list") [ -f "$FAKE/role" ] && echo '[{"roleid":"Warden"}]' || echo '[{"roleid":"PVEAdmin"}]' ;;
-  "user token") [ "$3" = add ] && echo '{"full-tokenid":"pvewarden@pve!server","value":"'"$FAKE_SECRET"'"}' ;;
+  "user token") [ "$3" != add ] || echo '{"full-tokenid":"pvewarden@pve!server","value":"'"$FAKE_SECRET"'"}' ;;
 esac
 """,
     "pct": """case "$1" in
@@ -463,12 +463,45 @@ def test_uninstall_leaves_objects_it_did_not_create(host):
     assert "role Warden left alone" in r.stdout and "pool pvewarden left alone" in r.stdout
 
 
-def test_upgrade_from_an_older_install_records_its_objects_as_its_own(host):
+def legacy_upgrade(host, **env):
     host.state.mkdir()
     (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
     host.mark("ct")
-    assert host.run("upgrade", "--yes").returncode == 0
-    assert (host.state / "owned.conf").read_text().split() == ["POOL=1", "ROLE=1", "USER=1"]
+    r = host.run("upgrade", "--yes", **env)
+    assert r.returncode == 0, r.stderr
+    return [line for line in (host.state / "owned.conf").read_text().splitlines() if not line.startswith("#")]
+
+
+def test_upgrade_from_an_older_install_does_not_claim_its_objects(host):
+    # 0.1.1 may have taken over a pool, role or user someone else made: never assume they are ours
+    assert legacy_upgrade(host) == []
+    host.mark("pool", "user", "role")
+    r = host.run("uninstall", "--yes")
+    calls = host.calls()
+    assert not any(c.startswith(("pveum user delete", "pveum role delete", "pveum pool delete")) for c in calls)
+    assert "pveum user delete pvewarden@pve" in r.stdout  # told how, not done
+
+
+def test_upgrade_from_an_older_install_claims_its_objects_when_told(host):
+    assert legacy_upgrade(host, PVEWARDEN_ADOPT_EXISTING="yes") == ["POOL=1", "ROLE=1", "USER=1"]
+
+
+def test_the_ownership_answer_is_asked_once(host):
+    legacy_upgrade(host)
+    host.run("upgrade", "--yes", PVEWARDEN_ADOPT_EXISTING="yes")
+    assert "POOL=1" not in (host.state / "owned.conf").read_text()  # the first answer stands
+
+
+def test_uninstall_removes_the_token_even_from_a_user_it_did_not_create(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
+    (host.state / "owned.conf").write_text("# install before 0.1.2\n")
+    host.mark("ct", "user", "token")
+    r = host.run("uninstall", "--yes")
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = host.calls()
+    assert "pveum user token remove pvewarden@pve server" in calls
+    assert "pveum user delete pvewarden@pve" not in calls
 
 
 def test_requires_proxmox_8(host):

@@ -521,6 +521,25 @@ mark_owned() {
   mkdir -p "$ETC"
   echo "$1=1" >> "$OWNED"
 }
+# legacy_ownership: installs before 0.1.2 did not record whether they created the pool, role and
+# user or took over existing ones without asking. Only the admin knows: record them as ours only
+# when told (uninstall deletes what is recorded), and remember the answer.
+legacy_ownership() {
+  local adopt=no
+  if [ "$YES" = 1 ]; then
+    adopt=$(env_or ADOPT_EXISTING no)
+  elif whiptail --title "$TITLE" --defaultno --yesno "pvewarden 0.1.1 and older did not record whether they created pool $POOL, role $ROLE and user $PVE_USER, or took over ones that already existed.\n\nDid pvewarden-setup create all three? Say yes only if none of them existed before you installed pvewarden: 'uninstall' will then delete them.\n\nNo (or unsure) = 'uninstall' leaves them and tells you how to remove them." 16 90; then
+    adopt=yes
+  fi
+  if [ "$DRY_RUN" = 1 ]; then echo "would record in $OWNED: install before 0.1.2, created by pvewarden-setup: $adopt"; return 0; fi
+  mkdir -p "$ETC"
+  echo "# install before 0.1.2; the admin said pvewarden-setup created the pool, role and user: $adopt" > "$OWNED"
+  if [ "$adopt" = yes ]; then
+    mark_owned POOL
+    mark_owned ROLE
+    mark_owned USER
+  fi
+}
 pool_exists() { pvesh get "/pools/$POOL" >/dev/null 2>&1; }
 role_exists() { pveum role list --output-format json | json 'exit !grep { $_->{roleid} eq "'"$ROLE"'" } @$d'; }
 user_exists() { pvesh get "/access/users/$PVE_USER" >/dev/null 2>&1; }
@@ -928,12 +947,7 @@ do_upgrade() {
   info "restarting the pvewarden service"
   slow pct exec "$CTID" -- systemctl restart pvewarden
   CT_IP=${CT_IP:-$LISTEN}
-  if [ ! -f "$OWNED" ]; then
-    # installed before 0.1.2, which created these (or took them over without asking)
-    mark_owned POOL
-    mark_owned ROLE
-    mark_owned USER
-  fi
+  [ -f "$OWNED" ] || legacy_ownership
   install_enroll_tool_keep_conf
   save_state
   if confirm "Enroll every guest in pool $POOL again (pvewarden-enroll --all)?\n\nThis updates the client on the guests and gives each guest its own SSH key. Since 0.1.2 the server refuses guests that have no key of their own, so say yes unless you will run pvewarden-enroll yourself."; then
@@ -983,13 +997,21 @@ do_uninstall() {
   fi
   info "removing Proxmox user $PVE_USER (and its token), role $ROLE and pool $POOL"
   if user_exists; then
-    if owns USER; then run pveum user delete "$PVE_USER"; else echo "user $PVE_USER left alone: pvewarden-setup did not create it"; fi
+    if owns USER; then
+      run pveum user delete "$PVE_USER"
+    else
+      # the token is always pvewarden's own: a credential must not outlive the install
+      if pvesh get "/access/users/$PVE_USER/token/$TOKEN_NAME" >/dev/null 2>&1; then
+        run pveum user token remove "$PVE_USER" "$TOKEN_NAME"
+      fi
+      echo "user $PVE_USER left alone (not recorded as created by pvewarden-setup); pvewarden's token $TOKEN_NAME on it is removed. If it is not used elsewhere: pveum user delete $PVE_USER"
+    fi
   fi
   if role_exists; then
-    if owns ROLE; then run pveum role delete "$ROLE"; else echo "role $ROLE left alone: pvewarden-setup did not create it"; fi
+    if owns ROLE; then run pveum role delete "$ROLE"; else echo "role $ROLE left alone (not recorded as created by pvewarden-setup). If it is not used elsewhere: pveum role delete $ROLE"; fi
   fi
   if pool_exists && ! owns POOL; then
-    echo "pool $POOL left alone: pvewarden-setup did not create it"
+    echo "pool $POOL left alone (not recorded as created by pvewarden-setup). If it is not used elsewhere: pveum pool delete $POOL"
   elif pool_exists; then
     # a pool must be empty before it can be deleted; guests stay, only the membership goes
     local members

@@ -147,6 +147,17 @@ What a pvewarden snapshot is, so you know what a rollback brings back:
   else names that way can be rolled back to or deleted by an agent with the update tag. Not closed;
   accepted as lower priority because rollback and deletion require your confirmation in the client,
   which the agent cannot give. Planned for 0.1.3: a record of the snapshots pvewarden took.
+- **A shared `[ssh] key`** is still accepted for guests whose address you fix in `[addresses]` (or
+  static guests). There the address comes from you, not from a guest, so a guest cannot redirect
+  it, but one key opens all of those guests. Prefer `pvewarden key new` per guest.
+- **The installer does not check the provenance attestation**, only the checksum, and both come
+  from the same GitHub release. A Proxmox host has no `gh`. Check it yourself before installing
+  (see Supply chain) if a compromised release page is in your threat model.
+- **Enrolling is several steps** (`pvewarden-enroll`). Each step on the server takes the guest's
+  lock and a new key is refused while an update's result is unknown, but the whole enrollment is
+  not one locked operation. A change the agent starts between two steps works with either key.
+- **Audit records are not redacted.** Tool arguments are VMIDs, modes and snapshot names; guest
+  output goes to the run logs, which are readable only by the service user.
 - **Tested combinations.** Containers and VMs on Proxmox VE 9 with directory/LVM-thin storage and the
   guest agent. Other storage and older versions should behave the same but are less tested.
 
@@ -166,7 +177,8 @@ What a pvewarden snapshot is, so you know what a rollback brings back:
 
 - `state_dir/audit.jsonl`: one JSON line per event. Every tool call gets an id, a `tool_call` record
   before it runs (agent, IP, arguments) and a `tool_result` record after it (`ok`, `error` with the
-  reason, or `asked_user`, plus the duration). What the call did in between carries the same id:
+  reason, `asked_user`, or `cancelled` when the client went away or the server stopped, plus the
+  duration). What the call did in between carries the same id:
   snapshots, updates (snapshot, exit code, reboot needed, newly failed services), reboots,
   rollbacks, deletions. A tool that changes something does not run if its `tool_call` record cannot
   be written.

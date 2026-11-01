@@ -194,7 +194,7 @@ enroll_one() {
     return 0
   fi
   pub=$(server key new "$id") || {
-    echo "cannot make a key on the pvewarden server (is it running and up to date?)" >&2
+    echo "cannot make a key on the pvewarden server (see the reason above; is it running and up to date?)" >&2
     return 1
   }
   slow "run_$type" "$id" "${OPTS[@]}" --keep-keys "$pub" "$FROM" || return 1

@@ -52,7 +52,7 @@ def client_name(ctx: Context) -> str | None:
 
 class AuditedServer(MCPServer):
     """Every tool call: 'tool_call' (who, from where, arguments) before it runs, 'tool_result'
-    (ok / error / asked the user, duration) after; records in between carry the same call id.
+    (ok / error / asked the user / cancelled, duration) after; records in between carry the same call id.
     A changing tool does not run if its 'tool_call' record cannot be written."""
 
     def __init__(self, app: App, *args, **kwargs):
@@ -81,6 +81,9 @@ class AuditedServer(MCPServer):
                 result = await super().call_tool(name, arguments, context)
             except Exception as e:
                 self._result(name, start, outcome="error", error=str(e)[:500])
+                raise
+            except BaseException as e:  # cancelled (client gone, server stopping): still say how it ended
+                self._result(name, start, outcome="cancelled", error=type(e).__name__)
                 raise
             if isinstance(result, InputRequiredResult):
                 self._result(name, start, outcome="asked_user")

@@ -77,6 +77,19 @@ async def test_a_refused_call_is_audited_with_its_reason(app):
     assert "missing the Proxmox tag" in result["error"] and call["call"] == result["call"]
 
 
+async def test_a_cancelled_call_still_gets_its_result_record(app):
+    import asyncio
+
+    async def cancelled(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    app.check_services = cancelled
+    with pytest.raises(asyncio.CancelledError):
+        await create_server(app).call_tool("check_services", {"vmid": 101})
+    call, result = audit_entries(app)
+    assert result["outcome"] == "cancelled" and result["call"] == call["call"]
+
+
 async def test_no_change_without_an_audit_record(app):
     app.audit.path.mkdir()  # the audit log cannot be written
     async with Client(create_server(app)) as client:

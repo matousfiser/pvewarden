@@ -79,12 +79,15 @@ class Fence:
         if current is None or current.get("run_id") != run_id:
             return False
         self._file(vmid).unlink(missing_ok=True)
+        self._sync_dir()
         return True
 
     def clear(self, vmid: int) -> dict | None:
         """For a human (pvewarden pending clear): remove whatever is pending."""
         current = self.pending(vmid)
         self._file(vmid).unlink(missing_ok=True)
+        if self.pending_dir.is_dir():
+            self._sync_dir()
         return current
 
     def vmids(self) -> list[int]:
@@ -100,3 +103,13 @@ class Fence:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self._file(vmid))
+        self._sync_dir()
+
+    def _sync_dir(self) -> None:
+        """Make a rename or unlink in pending/ durable: after a power loss the fence is still there
+        (or still gone)."""
+        fd = os.open(self.pending_dir, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)

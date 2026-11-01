@@ -181,3 +181,22 @@ def test_cli_rejects_a_vmid_that_is_not_a_number(config_file):
 def test_give_key_helper_matches_the_store_layout(app):
     give_key(app, 999)
     assert app.keys.active(999) == app.keys.path / "999"
+
+
+def test_cli_new_key_waits_for_an_update_result(config_file, tmp_path):
+    from pvewarden.fence import Fence
+
+    Fence(tmp_path / "state").begin(101)
+    with pytest.raises(SystemExit) as e:
+        main(["-c", str(config_file), "key", "new", "101"])
+    assert "result is not known yet" in str(e.value.code)
+
+
+def test_cli_key_steps_wait_for_a_change_in_progress(config_file, tmp_path):
+    from pvewarden.fence import Fence
+
+    with Fence(tmp_path / "state").lock(101):
+        for action in ("new", "activate", "remove"):
+            with pytest.raises(SystemExit) as e:
+                main(["-c", str(config_file), "key", action, "101"])
+            assert "in progress" in str(e.value.code)

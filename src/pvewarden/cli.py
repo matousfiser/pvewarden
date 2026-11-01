@@ -82,15 +82,24 @@ def key(args: argparse.Namespace) -> None:
         return
     if args.vmid is None:
         sys.exit(f"pvewarden key {args.action}: a VMID is needed")
-    if args.action == "new":
-        print(store.new(args.vmid))
-    elif args.action == "verify":
+    if args.action == "verify":
         sys.exit(verify_new_key(cfg, args.vmid))
-    elif args.action == "activate":
-        store.activate(args.vmid)
-        print(f"guest {args.vmid}: new key active", file=sys.stderr)
-    elif args.action == "remove":
-        store.remove(args.vmid)
+    from pvewarden.fence import Fence
+
+    fence = Fence(cfg.state_dir)
+    with fence.lock(args.vmid):  # not while the server is changing this guest
+        if args.action == "new":
+            if fence.pending(args.vmid) is not None:
+                raise KeyStoreError(
+                    f"guest {args.vmid} has a pvewarden update whose result is not known yet; enroll it once "
+                    f"the agent has called update_result (see: pvewarden pending list)"
+                )
+            print(store.new(args.vmid))
+        elif args.action == "activate":
+            store.activate(args.vmid)
+            print(f"guest {args.vmid}: new key active", file=sys.stderr)
+        elif args.action == "remove":
+            store.remove(args.vmid)
 
 
 def pending(args: argparse.Namespace) -> None:

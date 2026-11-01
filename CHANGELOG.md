@@ -27,8 +27,13 @@
   guest stays blocked and a human clears it after checking: `pvewarden pending list|clear <vmid>`.
 - A lost SSH connection during an update no longer counts as a failed update: the guest stays
   blocked and `update_result` picks it up.
+- Writes of that record are flushed to disk with their directory, so it survives a power loss.
+- Enrolling a guest takes its lock in each step, and a new key is refused while an update's result
+  is unknown.
 
 **Audit log**
+- A call that is cancelled (client gone, server stopping) still gets its `tool_result` record
+  (`cancelled`).
 - Every tool call gets an id and two records: `tool_call` (agent, IP, arguments) before it runs and
   `tool_result` (`ok`, `error` with the reason, or `asked_user`, and the duration) after. Records
   written in between carry the same id. Before, errors and refusals had no outcome record.
@@ -65,6 +70,10 @@
   (dialog, or `PVEWARDEN_ADOPT_EXISTING=yes`). Before, it rewrote an existing `Warden` role's
   privileges and `uninstall` deleted such objects. `uninstall` now deletes only what the installer
   created or took over (`/etc/pvewarden/owned.conf`); upgrades record the objects of older installs.
+- Upgrading an install from before 0.1.2 no longer records the pool, role and user as created by
+  pvewarden: older installers may have taken over existing ones. The upgrade asks (default no;
+  `PVEWARDEN_ADOPT_EXISTING=yes` with `--yes`). `uninstall` always removes pvewarden's API token,
+  also from a user it leaves in place, and prints how to remove what it left.
 - When a step fails, `pvewarden-setup` says so instead of stopping without a word.
 - When a guest refuses the server's new key because the server's address changed (DHCP),
   `pvewarden-enroll` says so; docs/troubleshooting.md has the steps to move to a new address.
