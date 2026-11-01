@@ -96,7 +96,9 @@ class Fence:
         return sorted(int(f.stem) for f in self.pending_dir.glob("*.json") if f.stem.isdigit())
 
     def _write(self, vmid: int, data: dict) -> None:
-        self.pending_dir.mkdir(parents=True, exist_ok=True)
+        if not self.pending_dir.is_dir():
+            self.pending_dir.mkdir(parents=True, exist_ok=True)
+            _fsync_dir(self.pending_dir.parent)  # the new directory's own entry
         tmp = self.pending_dir / f".{int(vmid)}.{secrets.token_hex(4)}.tmp"
         with open(tmp, "w") as f:
             json.dump(data, f)
@@ -106,10 +108,14 @@ class Fence:
         self._sync_dir()
 
     def _sync_dir(self) -> None:
-        """Make a rename or unlink in pending/ durable: after a power loss the fence is still there
-        (or still gone)."""
-        fd = os.open(self.pending_dir, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        """Flush a rename or unlink in pending/ to disk, so that on a file system that honours fsync
+        the fence is still there (or still gone) after a power loss."""
+        _fsync_dir(self.pending_dir)
+
+
+def _fsync_dir(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)

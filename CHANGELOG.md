@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (2026-11-01)
 
 **Security**
 - Every guest has its own SSH key, made on the server when the guest is enrolled. Before, guests
@@ -27,7 +27,8 @@
   guest stays blocked and a human clears it after checking: `pvewarden pending list|clear <vmid>`.
 - A lost SSH connection during an update no longer counts as a failed update: the guest stays
   blocked and `update_result` picks it up.
-- Writes of that record are flushed to disk with their directory, so it survives a power loss.
+- Writes of that record are fsynced together with its directory (and the directory's creation), so
+  on file systems that honour fsync it survives a power loss.
 - Enrolling a guest takes its lock in each step, and a new key is refused while an update's result
   is unknown.
 

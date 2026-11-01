@@ -509,3 +509,16 @@ def test_a_human_clears_the_fence_from_the_command_line(app, tmp_path, capsys):
     main(["-c", str(cfg_file), "pending", "clear", "101"])
     assert app.fence.pending(101) is None
     assert '"pending_cleared_by_admin"' in (app.cfg.state_dir / "audit.jsonl").read_text()
+
+
+def test_the_pending_record_is_fsynced_with_its_directories(tmp_path, monkeypatch):
+    import pvewarden.fence as fence_mod
+
+    synced = []
+    monkeypatch.setattr(fence_mod, "_fsync_dir", lambda path: synced.append(path))
+    f = fence_mod.Fence(tmp_path)
+    p = f.begin(101)
+    assert synced == [tmp_path, tmp_path / "pending"]  # the new directory's entry, then the record
+    synced.clear()
+    f.finish(101, p["run_id"])
+    assert synced == [tmp_path / "pending"]
