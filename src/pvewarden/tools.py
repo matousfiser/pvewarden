@@ -1,6 +1,9 @@
 """MCP tool definitions. Thin wrappers around App; descriptions are written for the agent."""
 
-from typing import Literal
+import logging
+import secrets
+import time
+from typing import Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -9,6 +12,7 @@ from mcp_types import InputRequiredResult
 
 from pvewarden import __version__
 from pvewarden.app import App
+from pvewarden.audit import CALL_ID
 from pvewarden.confirm import confirm
 from pvewarden.errors import WardenError
 from pvewarden.http import CLIENT_KEY
@@ -18,10 +22,79 @@ CHANGES = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 
 
+# tools that change something (or lift a guest's block): their call is not run unless it is in the audit log
+CHANGING_TOOLS = frozenset(
+    {
+        "snapshot_guest",
+        "apply_updates",
+        "update_result",
+        "reboot_guest",
+        "rollback_snapshot",
+        "delete_snapshot",
+        "delete_old_snapshots",
+    }
+)
+log = logging.getLogger(__name__)
+
+
+def _scope(ctx: Context | None) -> dict:
+    try:
+        request = getattr(ctx.request_context, "request", None) if ctx else None
+    except (ValueError, AttributeError):  # outside a request
+        return {}
+    return getattr(request, "scope", None) or {}
+
+
 def client_name(ctx: Context) -> str | None:
     """Name of the token the call came with ([http.clients]); None over stdio."""
-    request = getattr(ctx.request_context, "request", None)
-    return (getattr(request, "scope", None) or {}).get(CLIENT_KEY)
+    return _scope(ctx).get(CLIENT_KEY)
+
+
+class AuditedServer(MCPServer):
+    """Every tool call: 'tool_call' (who, from where, arguments) before it runs, 'tool_result'
+    (ok / error / asked the user, duration) after; records in between carry the same call id.
+    A changing tool does not run if its 'tool_call' record cannot be written."""
+
+    def __init__(self, app: App, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.app = app
+
+    async def call_tool(self, name: str, arguments: dict[str, Any], context: Context | None = None):
+        call_id = secrets.token_hex(6)
+        token = CALL_ID.set(call_id)
+        scope = _scope(context)
+        ip = (scope.get("client") or (None,))[0]
+        try:
+            try:
+                self.app.audit.write(
+                    "tool_call",
+                    must=name in CHANGING_TOOLS,
+                    tool=name,
+                    client=scope.get(CLIENT_KEY),
+                    ip=ip,
+                    args=arguments,
+                )
+            except OSError as e:
+                raise ToolError(f"the audit log cannot be written ({e}); nothing was done. Tell the user.") from e
+            start = time.monotonic()
+            try:
+                result = await super().call_tool(name, arguments, context)
+            except Exception as e:
+                self._result(name, start, outcome="error", error=str(e)[:500])
+                raise
+            if isinstance(result, InputRequiredResult):
+                self._result(name, start, outcome="asked_user")
+            elif getattr(result, "is_error", False):
+                text = " ".join(getattr(c, "text", "") for c in result.content)
+                self._result(name, start, outcome="error", error=text[:500])
+            else:
+                self._result(name, start, outcome="ok")
+            return result
+        finally:
+            CALL_ID.reset(token)
+
+    def _result(self, name: str, start: float, **fields) -> None:
+        self.app.audit.write("tool_result", tool=name, ms=round((time.monotonic() - start) * 1000), **fields)
 
 
 async def expose(awaitable):
@@ -56,7 +129,7 @@ def create_server(app: App) -> MCPServer:
             " Proxmox API is not connected (static inventory): snapshots, reboots and rollbacks are "
             "unavailable and vmid/node/status values are placeholders. This is expected."
         )
-    mcp = MCPServer("pvewarden", version=__version__, instructions=instructions)
+    mcp = AuditedServer(app, "pvewarden", version=__version__, instructions=instructions)
 
     @mcp.tool(
         annotations=READ_ONLY,

@@ -107,7 +107,7 @@ blocked until a human has checked it (`pvewarden pending clear`); the agent cann
 ## Tokens and network
 
 - **MCP tokens** are random, at least 32 characters, one per agent, and compared in constant time.
-  Each tool call is written to the audit log with the agent's name and IP. Rotate with
+  Each tool call and its outcome is written to the audit log with the agent's name and IP. Rotate with
   `pvewarden-setup token <name>`. Treat a token like a password: it allows everything the tags allow.
 - **Transport:** HTTPS with a certificate signed by your Proxmox CA, or plain HTTP inside a VPN you
   trust. Requests are refused if their `Host` header is not the server's address or a configured
@@ -123,9 +123,14 @@ blocked until a human has checked it (`pvewarden pending clear`); the agent cann
 
 ## Audit trail
 
-- `state_dir/audit.jsonl`: one JSON line per event. It records tool calls (agent, IP, arguments),
-  refused requests, snapshots (with the agent's name), updates (snapshot, exit code, reboot needed,
-  newly failed services), reboots, rollbacks and deletions.
+- `state_dir/audit.jsonl`: one JSON line per event. Every tool call gets an id, a `tool_call` record
+  before it runs (agent, IP, arguments) and a `tool_result` record after it (`ok`, `error` with the
+  reason, or `asked_user`, plus the duration). What the call did in between carries the same id:
+  snapshots, updates (snapshot, exit code, reboot needed, newly failed services), reboots,
+  rollbacks, deletions. A tool that changes something does not run if its `tool_call` record cannot
+  be written.
+- Refused requests (no or wrong token) are summarised: the first one from an address is written at
+  once, the rest of that minute as one `http_denied_summary` line with a count.
 - `state_dir/runs/`: the complete apt output of every update.
 - Proxmox's own task log shows every snapshot, rollback and reboot as user `pvewarden@pve`.
 - Snapshot descriptions name the agent, e.g. `before security updates (client: claude)`.

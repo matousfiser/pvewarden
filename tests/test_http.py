@@ -11,7 +11,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 
 from pvewarden.app import App
-from pvewarden.audit import AuditLog
+from pvewarden.audit import AuditLog, DeniedLog
 from pvewarden.config import parse
 from pvewarden.http import BearerAuth, build_app
 from pvewarden.tools import create_server
@@ -58,21 +58,28 @@ async def test_rejects_without_valid_token(client, audit, headers):
     assert entries(audit)[-1]["action"] == "http_denied"
 
 
-async def test_passes_body_through_and_audits_tool_calls(client, audit):
+async def test_passes_the_body_through_untouched_and_names_the_client(client, audit):
     call = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_guests", "arguments": {}}}
     body = json.dumps(call).encode()
     r = await client.post("/mcp", content=body, headers={"Authorization": f"Bearer {TOKEN_B}"})
     assert r.status_code == 200 and r.content == body
-    (entry,) = entries(audit)
-    assert entry["action"] == "http_call"
-    assert (entry["client"], entry["tool"], entry["args"]) == ("bob", "list_guests", {})
+    assert not audit.path.exists()  # the tools write the audit records (with outcome), not the transport
 
 
-async def test_other_methods_and_garbage_are_not_audited(client, audit):
-    for body in (b'{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}', b"not json", b"[1, 2]"):
-        r = await client.post("/mcp", content=body, headers={"Authorization": f"bearer {TOKEN_A}"})
-        assert r.status_code == 200
-    assert not audit.path.exists()
+def test_refused_requests_are_summarised_per_address(audit):
+    now = [0.0]
+    denied = DeniedLog(audit, window=60, max_sources=2, clock=lambda: now[0])
+    for _ in range(500):
+        denied.denied("192.0.2.66", "/mcp")
+    assert [e["action"] for e in entries(audit)] == ["http_denied"]  # one line, not 500
+    now[0] = 61
+    denied.denied("192.0.2.66", "/mcp")  # next window: the summary of the last one, then a new first line
+    summary = [e for e in entries(audit) if e["action"] == "http_denied_summary"]
+    assert summary[0]["ip"] == "192.0.2.66" and summary[0]["count"] == 500
+    for ip in ("192.0.2.1", "192.0.2.2", "192.0.2.3"):  # beyond max_sources: one shared entry
+        denied.denied(ip, "/mcp")
+    assert len(denied.sources) == 3 and denied.sources["*"]["count"] == 2  # max_sources + one shared
+    denied.flush(force=True)
 
 
 def test_allowed_hosts_include_configured_names():
@@ -115,6 +122,14 @@ async def test_tools_learn_which_client_called(tmp_path, audit):
             res = await client.call_tool("snapshot_guest", {"vmid": 101, "description": "by hand"})
         assert not res.is_error
         assert app.pve.snaps[101][0]["description"] == "by hand (client: alice)"
+        # the audit trail of the call: who, from where, what, the outcome; one call id throughout
+        log = [json.loads(line) for line in app.audit.path.read_text().splitlines()]
+        call, snap, result = log
+        assert (call["action"], call["tool"], call["client"], call["ip"]) == ("tool_call", "snapshot_guest", "alice",
+                                                                              "127.0.0.1")  # fmt: skip
+        assert call["args"] == {"vmid": 101, "description": "by hand"}
+        assert snap["action"] == "snapshot" and result["action"] == "tool_result" and result["outcome"] == "ok"
+        assert call["call"] == snap["call"] == result["call"] and "ms" in result
     finally:
         server.should_exit = True
         await task

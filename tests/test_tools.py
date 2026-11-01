@@ -57,6 +57,36 @@ async def test_unexpected_errors_stay_generic(app):
     assert "internal detail" not in text(res)
 
 
+def audit_entries(app) -> list[dict]:
+    return [json.loads(line) for line in app.audit.path.read_text().splitlines()]
+
+
+def test_every_changing_tool_is_audited_before_it_runs():
+    from pvewarden.tools import CHANGING_TOOLS
+
+    assert {name for name, read_only in EXPECTED_TOOLS.items() if not read_only} <= CHANGING_TOOLS
+    assert "update_result" in CHANGING_TOOLS  # it can lift a guest's block
+
+
+async def test_a_refused_call_is_audited_with_its_reason(app):
+    async with Client(create_server(app)) as client:
+        await client.call_tool("apply_updates", {"vmid": 103})
+    call, result = audit_entries(app)
+    assert (call["action"], call["tool"], call["args"]) == ("tool_call", "apply_updates", {"vmid": 103})
+    assert result["action"] == "tool_result" and result["outcome"] == "error"
+    assert "missing the Proxmox tag" in result["error"] and call["call"] == result["call"]
+
+
+async def test_no_change_without_an_audit_record(app):
+    app.audit.path.mkdir()  # the audit log cannot be written
+    async with Client(create_server(app)) as client:
+        res = await client.call_tool("apply_updates", {"vmid": 101})
+        assert res.is_error and "audit log cannot be written" in text(res)
+        assert app.runner.calls == [] and app.pve.events == []  # nothing ran
+        read = await client.call_tool("check_updates", {"vmids": [101]})
+    assert not read.is_error  # reading goes on (and is reported in the server log)
+
+
 async def test_list_guests_result(app):
     async with Client(create_server(app)) as client:
         res = await client.call_tool("list_guests", {})

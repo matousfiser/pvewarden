@@ -28,6 +28,15 @@
 - A lost SSH connection during an update no longer counts as a failed update: the guest stays
   blocked and `update_result` picks it up.
 
+**Audit log**
+- Every tool call gets an id and two records: `tool_call` (agent, IP, arguments) before it runs and
+  `tool_result` (`ok`, `error` with the reason, or `asked_user`, and the duration) after. Records
+  written in between carry the same id. Before, errors and refusals had no outcome record.
+- A tool that changes something does not run if its `tool_call` record cannot be written.
+- Refused requests are summarised per address and minute (`http_denied_summary` with a count)
+  instead of one line each, so a flood of them cannot fill the disk.
+- The HTTP layer no longer reads every request body into memory for the audit log.
+
 ## 0.1.1 (2026-11-01)
 
 - `pvewarden-setup`: the install summary, `connect` and `token` output are laid out in clear
