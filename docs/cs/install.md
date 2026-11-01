@@ -57,7 +57,9 @@ Otázky v pořadí:
 Pak průvodce:
 
 - vytvoří v Proxmoxu pool `pvewarden`, roli `Warden`, uživatele `pvewarden@pve` bez přihlášení a jeho
-  token. Token platí jen na pool a jde rovnou do konfigurace serveru, nikde se nevypisuje.
+  token. Token platí jen na pool a jde rovnou do konfigurace serveru, nikde se nevypisuje. Pokud
+  pool, role nebo uživatel s tímto jménem už existují a nevytvořil je instalátor, zastaví se ještě
+  před první změnou a zeptá se, jestli je má převzít (bez dialogu: `PVEWARDEN_ADOPT_EXISTING=yes`).
 - vytvoří kontejner (neprivilegovaný, startuje s nodem) a nainstaluje do něj server,
 - vystaví HTTPS certifikát. Privátní klíč vznikne v kontejneru a nikdy ho neopustí.
 - nainstaluje na hosta `pvewarden-enroll` a zeptá se, jestli **zapsat hosty** hned,
@@ -80,8 +82,9 @@ zeptá:
   - *vypnout* znamená, že aktualizace instaluje jen pvewarden, vždy se snapshotem,
   - *zapnout* znamená, že se hosté aktualizují i sami každý den.
 
-Zapsání přidá hosta do poolu, doplní tagy a nainstaluje klienta. Spustit ho znovu je bezpečné, jen
-obnoví klienta. Z příkazové řádky:
+Zapsání přidá hosta do poolu, doplní tagy, nainstaluje klienta a vytvoří pro hosta vlastní SSH
+klíč. Host přijme jen ten svůj, takže ani napadený host nedokáže server poslat k jinému hostovi.
+Spustit ho znovu je bezpečné: obnoví klienta a vymění klíč. Z příkazové řádky:
 
 ```
 pvewarden-enroll --pool --tags pvewarden-update,pvewarden-reboot 101 102 110
@@ -118,7 +121,8 @@ bash pvewarden-setup uninstall
 Odstraní postupně:
 
 1. klienta ze všech hostů v poolu,
-2. token, uživatele, roli a pool v Proxmoxu. Hosté zůstanou, zmizí jen jejich členství v poolu.
+2. token, uživatele, roli a pool v Proxmoxu, ale jen ty, které instalátor vytvořil nebo které jsi mu
+   dovolil převzít. Hosté zůstanou, zmizí jen jejich členství v poolu.
 3. nástroje na hostu.
 
 Tagy hostů zůstanou. Kontejner i s audit logem se smaže jen po samostatném potvrzení. Snapshoty,
