@@ -62,6 +62,9 @@ bash pvewarden-setup
 
 `pvewarden-setup` checks the checksum of everything it downloads. To check the script itself, compare
 `sha256sum pvewarden-setup` with `SHA256SUMS` on the [release page](https://github.com/matousfiser/pvewarden/releases/latest).
+Release files also carry a signed build provenance: with the GitHub CLI,
+`gh attestation verify pvewarden-setup -R matousfiser/pvewarden` proves the file was built by this
+repository's release workflow.
 
 The wizard asks a few questions and then:
 

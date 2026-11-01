@@ -79,3 +79,20 @@ def test_logs_are_rotated_and_old_run_logs_removed():
     assert "/etc/logrotate.d/pvewarden" in install and "/usr/lib/tmpfiles.d/pvewarden.conf" in install
     assert "/var/lib/pvewarden/audit.jsonl" in (ROOT / "deploy/pvewarden.logrotate").read_text()
     assert "e /var/lib/pvewarden/runs - - - 180d" in (ROOT / "deploy/pvewarden.tmpfiles").read_text()
+
+
+# --- supply chain -------------------------------------------------------------------------------
+
+
+def test_every_dependency_is_pinned_with_hashes():
+    lock = (ROOT / "requirements.lock").read_text()
+    reqs = [line for line in lock.splitlines() if line and not line.startswith((" ", "#"))]
+    assert reqs and all("==" in r and r.endswith("\\") for r in reqs), reqs  # each pin continues with hashes
+    assert lock.count("--hash=sha256:") >= len(reqs)
+
+
+def test_the_server_installs_only_hash_checked_wheels_and_builds_nothing():
+    install = (ROOT / "deploy/install-server.sh").read_text()
+    assert "--require-hashes --only-binary=:all:" in install
+    assert "--upgrade pip" not in install  # no unpinned pip from the live index
+    assert 'pip" install -q --no-deps' not in install  # pvewarden is copied, not built

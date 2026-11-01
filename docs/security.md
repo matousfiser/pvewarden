@@ -121,6 +121,18 @@ blocked until a human has checked it (`pvewarden pending clear`); the agent cann
   private key is created in the container and never leaves it; only a signing request goes to the
   host.
 
+## Supply chain
+
+- Releases are built by a GitHub Actions workflow after the full test suite, from the tagged commit.
+  Actions are pinned to commit hashes. Each release has SHA-256 checksums and a signed build
+  provenance (`gh attestation verify <file> -R matousfiser/pvewarden`).
+- `pvewarden-setup` checks the checksum of the source it downloads.
+- The server installs its Python dependencies only as wheels whose SHA-256 is in
+  `requirements.lock`; nothing is built and pip is not upgraded from the network. pvewarden itself
+  is plain Python, copied from the checked source.
+- The checksum and the files come from the same GitHub release. The provenance attestation is the
+  check that does not depend on the release page alone.
+
 ## Audit trail
 
 - `state_dir/audit.jsonl`: one JSON line per event. Every tool call gets an id, a `tool_call` record

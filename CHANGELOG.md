@@ -44,6 +44,13 @@
 - The server rotates its audit log weekly (a year kept, `logrotate`) and removes run logs older than
   180 days (`systemd-tmpfiles`).
 
+**Supply chain**
+- `requirements.lock` pins every dependency with SHA-256 hashes. The server installs them with
+  `--require-hashes --only-binary=:all:`: no unpinned build tools, no pip upgrade from the network.
+  pvewarden itself is copied from the checked source instead of being built.
+- Release files get a signed build provenance attestation
+  (`gh attestation verify <file> -R matousfiser/pvewarden`).
+
 ## 0.1.1 (2026-11-01)
 
 - `pvewarden-setup`: the install summary, `connect` and `token` output are laid out in clear

@@ -21,9 +21,9 @@ jobs:
       # the server installs from requirements.lock: it must match uv.lock (Dependabot only updates uv.lock)
       - name: requirements.lock matches uv.lock
         run: |
-          uv export --frozen --no-hashes --no-dev --no-emit-project -o requirements.lock
+          uv export --frozen --no-dev --no-emit-project -o requirements.lock
           git diff --exit-code requirements.lock || {
-            echo "::error::requirements.lock is out of date: run uv export --frozen --no-hashes --no-dev --no-emit-project -o requirements.lock"
+            echo "::error::requirements.lock is out of date: run uv export --frozen --no-dev --no-emit-project -o requirements.lock"
             exit 1
           }
       - run: uv run ruff check .
