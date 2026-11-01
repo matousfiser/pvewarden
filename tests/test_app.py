@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import replace
 
 import pytest
@@ -104,7 +105,8 @@ async def test_apply_updates_snapshots_first_then_upgrades(app):
     assert res["planned"] == ["openssl", "vim"]  # not docker-ce: third-party
     assert res["newly_failed_services"] == []
     log = app.runs_dir / res["log"].rsplit("/", 1)[1]
-    assert log.read_text() == "All upgrades installed\n"
+    assert log.read_text().endswith("All upgrades installed\n")
+    assert "pvewarden-run" not in res["output_tail"]
 
 
 async def test_apply_updates_aborts_when_snapshot_fails(app):
@@ -299,13 +301,13 @@ async def test_update_keeps_running_and_is_picked_up_later(app):
     await app.apply_updates(101)  # free again
 
 
-async def test_update_result_with_an_old_guest_client(app):
+async def test_update_result_with_an_old_guest_client_keeps_the_fence(app):
     app.runner.responses["upgrade-security"] = slow_upgrade
     await app.apply_updates(101)
     app.runner.responses["upgrade-follow"] = (1, "pvewarden: command not allowed\n")
-    with pytest.raises(GuestError, match="older"):
+    with pytest.raises(GuestError, match="needs a human.*pvewarden pending clear 101"):
         await app.update_result(101)
-    assert not app.pending_dir.joinpath("101.json").exists()
+    assert app.fence.pending(101)["state"] == "unknown"
 
 
 async def test_update_already_running_on_the_guest(app):
@@ -351,3 +353,146 @@ async def test_snapshot_description_names_the_client(app):
     first, second = app.pve.snaps[101]
     assert first["description"] == "before security updates (client: claude)"
     assert second["description"] == "manual check"
+
+
+# --- one change per guest; the fence and its four outcomes ---------------------------------------
+
+
+async def test_two_changes_to_one_guest_at_the_same_time(app):
+    started, release = asyncio.Event(), asyncio.Event()
+
+    real_run = app.runner.run
+
+    async def run(address, command, *args, **kwargs):
+        if command == "upgrade-security" and address == "192.0.2.11":  # only guest 101 is slow
+            started.set()
+            await release.wait()
+        return await real_run(address, command, *args, **kwargs)
+
+    app.runner.run = run
+    first = asyncio.create_task(app.apply_updates(101))
+    await started.wait()
+    # while the first update runs: every other change to 101 is refused at once, nothing interleaves
+    for op in (app.apply_updates(101), app.snapshot(101), app.reboot(101), app.update_result(101)):
+        with pytest.raises(GuestError, match="another pvewarden operation on guest 101"):
+            await op
+    snaps_during = list(app.pve.events)
+    await app.apply_updates(102)  # other guests are not blocked
+    release.set()
+    res = await first
+    assert res["ok"] is True
+    assert [e for e in snaps_during if e[0] == "snapshot"] == [("snapshot", 101, res["snapshot"])]  # one snapshot
+    assert app.fence.pending(101) is None  # finished by the run that started it
+
+
+async def test_a_failed_snapshot_lifts_the_fence(app):
+    app.pve.fail_snapshot = True
+    with pytest.raises(ProxmoxError):
+        await app.apply_updates(101)
+    assert app.fence.pending(101) is None
+
+
+async def test_unreachable_guest_at_start_lifts_the_fence(app):
+    app.runner.responses["upgrade-security"] = (255, "ssh: connect to host 192.0.2.11 port 22: Connection refused\n")
+    with pytest.raises(GuestError, match="cannot reach guest 101.*nothing was started"):
+        await app.apply_updates(101)
+    assert app.fence.pending(101) is None
+
+
+async def test_a_dropped_connection_after_the_start_keeps_the_fence(app):
+    app.runner.responses["upgrade-security"] = (255, "Connection to 192.0.2.11 closed by remote host.\n")
+    res = await app.apply_updates(101)
+    assert res["still_running"] is True
+    p = app.fence.pending(101)
+    assert p["state"] == "started" and p["guest_run"] == "1700000000-42-123"
+
+
+async def test_restart_while_preparing_proves_nothing_ran(app):
+    # the server died after the fence went up but before the update command was sent
+    app.fence.begin(101, mode="security", snapshot=None, log=str(app.runs_dir / "x.log"), planned=["openssl"])
+    res = await app.update_result(101)
+    assert res["never_started"] is True and app.fence.pending(101) is None
+    assert app.runner.calls == []  # nothing to ask the guest
+
+
+async def test_restart_during_the_update_picks_up_the_same_run(app):
+    app.runner.responses["upgrade-security"] = slow_upgrade
+    await app.apply_updates(101)
+    # a new server process: no lock, only the pending file and the run log are left
+    from pvewarden.app import App
+
+    fresh = App(app.cfg)
+    fresh.pve, fresh.runner, fresh.keys = app.pve, app.runner, app.keys
+    app.runner.responses["upgrade-follow"] = (0, "All upgrades installed\n")
+    done = await fresh.update_result(101)
+    assert done["ok"] is True and fresh.fence.pending(101) is None
+
+
+async def test_result_of_another_run_keeps_the_fence(app):
+    app.runner.responses["upgrade-security"] = slow_upgrade
+    await app.apply_updates(101)
+    app.runner.guest_run = "1800000000-7-999"  # the guest's last run is not ours
+    app.runner.responses["upgrade-follow"] = (0, "All upgrades installed\n")
+    with pytest.raises(GuestError, match="cannot tell whether"):
+        await app.update_result(101)
+    assert app.fence.pending(101)["state"] == "unknown"
+    with pytest.raises(GuestError, match="needs a human"):  # and every change stays refused
+        await app.reboot(101)
+
+
+async def test_an_interrupted_update_keeps_the_fence_for_a_human(app):
+    app.runner.responses["upgrade-security"] = slow_upgrade
+    await app.apply_updates(101)
+    app.runner.responses["upgrade-follow"] = (1, "pvewarden: the update process ended without reporting a result\n")
+    with pytest.raises(GuestError, match="ended without a result"):
+        await app.update_result(101)
+    assert app.fence.pending(101)["state"] == "interrupted"
+    for op in (app.apply_updates(101), app.rollback(101, "pvewarden_x"), app.snapshot(101)):
+        with pytest.raises(GuestError, match="needs a human"):
+            await op
+
+
+async def test_no_run_seen_and_none_on_the_guest_proves_nothing_ran(app):
+    app.runner.guest_run = None  # the start never got as far as printing an id
+    app.runner.responses["upgrade-security"] = slow_upgrade
+    await app.apply_updates(101)
+    app.runner.responses["upgrade-follow"] = (4, "pvewarden: no update has run on this guest yet\n")
+    res = await app.update_result(101)
+    assert res["never_started"] is True and app.fence.pending(101) is None
+
+
+async def test_the_fence_is_removed_only_by_its_own_run(app):
+    p = app.fence.begin(101, mode="security", snapshot=None, log="x", planned=[])
+    assert app.fence.finish(101, "someone-else") is False and app.fence.pending(101) is not None
+    assert app.fence.finish(101, p["run_id"]) is True and app.fence.pending(101) is None
+
+
+def test_the_pending_file_is_written_atomically(app):
+    app.fence.begin(101, mode="security", snapshot=None, log="x", planned=[])
+    assert [f.name for f in app.fence.pending_dir.iterdir()] == ["101.json"]  # no temp files left
+    (app.fence.pending_dir / "101.json").write_text("{half")
+    assert app.fence.pending(101)["state"] == "unreadable"  # a broken file still fences
+
+
+async def test_an_unreachable_guest_while_following_keeps_the_fence_as_it_is(app):
+    app.runner.responses["upgrade-security"] = slow_upgrade
+    await app.apply_updates(101)
+    app.runner.responses["upgrade-follow"] = (255, "ssh: connect to host 192.0.2.11 port 22: No route to host\n")
+    res = await app.update_result(101)
+    assert res["still_running"] is True and app.fence.pending(101)["state"] == "started"  # not "needs a human"
+
+
+def test_a_human_clears_the_fence_from_the_command_line(app, tmp_path, capsys):
+    from pvewarden.cli import main
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        f'state_dir = "{app.cfg.state_dir}"\n[proxmox]\nhost = "h"\ntoken_id = "u@pve!t"\ntoken_secret = "s"\n'
+    )
+    p = app.fence.begin(101, mode="security", snapshot="pvewarden_x", log="l", planned=[])
+    app.fence.update(101, p, state="interrupted", reason="r")
+    main(["-c", str(cfg_file), "pending", "list"])
+    assert capsys.readouterr().out.startswith("101 interrupted r")
+    main(["-c", str(cfg_file), "pending", "clear", "101"])
+    assert app.fence.pending(101) is None
+    assert '"pending_cleared_by_admin"' in (app.cfg.state_dir / "audit.jsonl").read_text()

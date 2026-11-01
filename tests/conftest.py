@@ -28,6 +28,8 @@ class FakeRunner:
     def __init__(self):
         self.calls: list[tuple[str, str]] = []
         self.keys: list[tuple[str, str]] = []  # (command, key file name) per call
+        # the id a real guest prints first when it starts or follows an update (None: an old client)
+        self.guest_run: str | None = "1700000000-42-123"
         self.responses: dict[str, tuple[int, str]] = {
             "check": (0, CHECK_OUT),
             "status": (0, STATUS_OUT),
@@ -39,8 +41,15 @@ class FakeRunner:
     async def run(self, address, command, timeout=1800, log: Path | None = None, log_mode="a", *, key, alias=None):
         self.calls.append((address, command))
         self.keys.append((command, Path(key).name))
+        header = f"pvewarden-run: {self.guest_run}\n" if command.startswith("upgrade-") and self.guest_run else ""
+        if log and header:  # streamed: the id is in the log before the update ends (or times out)
+            with open(log, log_mode) as f:
+                f.write(header)
         resp = self.responses[command]
         rc, out = resp(address) if callable(resp) else resp
+        if rc in (4, 75) or "not allowed" in out or "connect to host" in out:  # no run id printed
+            header = ""
+        out = header + out
         if log:
             log.write_text(out)
         return rc, out

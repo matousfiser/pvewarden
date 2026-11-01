@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from pvewarden.app import guest_run_id
 from pvewarden.config import SSHConfig
 from pvewarden.errors import GuestTimeoutError
 from pvewarden.guest import GuestRunner, parse_services, parse_status, parse_upgradable
@@ -166,23 +167,27 @@ sed -i 's|^  now-upgrade-security)$|  now-upgrade-security)\n    echo started; s
 """
 
 
-async def test_update_goes_on_when_the_connection_drops_and_can_be_followed(guest):
+async def test_update_goes_on_when_the_connection_drops_and_can_be_followed(guest, tmp_path):
     setup = sh("docker", "exec", guest["name"], "bash", "-c", SLOW_UPGRADE, check=False)
     assert setup.returncode == 0, setup.stderr
     try:
-        with pytest.raises(GuestTimeoutError):
-            await guest["run"](guest["address"], "upgrade-security", timeout=2)  # SSH client killed
+        log = tmp_path / "run.log"
+        with pytest.raises(GuestTimeoutError):  # SSH client killed
+            await guest["run"](guest["address"], "upgrade-security", timeout=2, log=log)
+        started_as = guest_run_id(log)  # streamed before the connection went: the server keeps this
+        assert started_as
 
         # still running on the guest: a second update is refused, following it waits for the end
         rc, out = await guest["run"](guest["address"], "upgrade-security", timeout=60)
         assert rc == 75 and "already running" in out
         rc, out = await guest["run"](guest["address"], "upgrade-follow", timeout=300)
         assert rc == 0, out[-2000:]
-        assert out.startswith("started") and "finished-slowly" in out
+        assert guest_run_id(out) == started_as  # the same run, so its result may lift the fence
+        assert out.split("\n", 1)[1].startswith("started") and "finished-slowly" in out
 
-        # afterwards follow reports the finished run again
+        # afterwards follow reports the finished run again, with the same id
         rc, again = await guest["run"](guest["address"], "upgrade-follow", timeout=60)
-        assert rc == 0 and "finished-slowly" in again
+        assert rc == 0 and "finished-slowly" in again and guest_run_id(again) == started_as
     finally:
         sh("docker", "exec", guest["name"], "cp", "/root/pvewarden-guest.orig", "/usr/local/sbin/pvewarden-guest")
 

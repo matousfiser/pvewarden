@@ -15,6 +15,19 @@
 - A shared `[ssh] key` is still possible, but only for guests whose address is fixed in the config.
 - New `pvewarden key new|verify|activate|remove|list` for manual installs.
 
+**One change per guest at a time**
+- Every change to a guest (snapshot, update, waiting for an update, reboot, rollback, snapshot
+  deletion) holds a lock for that guest; a second one is refused at once. Before, two updates of one
+  guest called at the same time took two snapshots, and the second removed the first one's record of
+  the running update, which unblocked reboot and rollback while dpkg ran.
+- A running update is recorded before anything changes, with a random run id, and outlives a server
+  restart. Only its own run removes it. The guest names each run, and `update_result` lifts the
+  block only when the result is provably from that run, or when provably nothing ran
+  (`never_started`). When pvewarden cannot tell (e.g. the update process vanished during dpkg), the
+  guest stays blocked and a human clears it after checking: `pvewarden pending list|clear <vmid>`.
+- A lost SSH connection during an update no longer counts as a failed update: the guest stays
+  blocked and `update_result` picks it up.
+
 ## 0.1.1 (2026-11-01)
 
 - `pvewarden-setup`: the install summary, `connect` and `token` output are laid out in clear

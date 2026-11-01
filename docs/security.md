@@ -95,6 +95,15 @@ never falls back to another key. Enrolling again is also how to rotate a guest's
 Updates run detached from the SSH session (a transient systemd unit), so a dropped connection or a
 timeout cannot interrupt dpkg halfway.
 
+## One change per guest
+
+Every change to a guest holds a lock for that guest, so two changes never interleave. A running
+update is also recorded on disk before anything changes (`state_dir/pending`). That record outlives
+a server restart and blocks reboot, rollback, snapshots and further updates of the guest until the
+update's result is known. The guest names each update run, and the block is lifted only when the
+result is provably from that run or provably nothing ran. If pvewarden cannot tell, the guest stays
+blocked until a human has checked it (`pvewarden pending clear`); the agent cannot lift it.
+
 ## Tokens and network
 
 - **MCP tokens** are random, at least 32 characters, one per agent, and compared in constant time.

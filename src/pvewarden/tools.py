@@ -144,7 +144,9 @@ def create_server(app: App) -> MCPServer:
         annotations=READ_ONLY,
         description=(
             "Wait for an update that apply_updates reported as still_running and return its result, in "
-            "the same form as apply_updates (waits up to 30 minutes, then reports still_running again)."
+            "the same form as apply_updates (waits up to 30 minutes, then reports still_running again). "
+            "never_started=true means nothing was installed. If pvewarden cannot tell what happened, it "
+            "keeps the guest blocked and says a human must check it: tell the user, do not retry."
         ),
     )
     async def update_result(vmid: int) -> dict:

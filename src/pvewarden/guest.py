@@ -140,7 +140,7 @@ def parse_services(text: str) -> dict:
     return res
 
 
-NOISE_RE = re.compile(r"^\s*$|^\(Reading database \.\.\.")
+NOISE_RE = re.compile(r"^\s*$|^\(Reading database \.\.\.|^pvewarden-run: ")
 
 
 def clean_tail(text: str, lines: int = 60) -> str:

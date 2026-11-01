@@ -64,13 +64,15 @@ upgrade_from() {
 # again later and ends with the same exit status.
 RUN_DIR=/var/lib/pvewarden
 LOG=$RUN_DIR/upgrade.log RC=$RUN_DIR/upgrade.rc PIDF=$RUN_DIR/upgrade.pid LOCK=$RUN_DIR/upgrade.lock
+RUN_ID=$RUN_DIR/upgrade.id # names the current run; the server checks a result belongs to its run
 SELF=$(readlink -f "$0")
 
 running() { [ -e "$LOCK" ] && ! flock -n "$LOCK" true; }
 
-# follow: print the current run's output from the start until it ends, then exit with its status
+# follow: print the run's id, then its output from the start until it ends; exit with its status
 follow() {
   local pid=""
+  if [ -s "$RUN_ID" ]; then echo "pvewarden-run: $(cat "$RUN_ID")"; fi
   for _ in $(seq 50); do  # the run writes its pid right after it starts
     pid=$(cat "$PIDF" 2>/dev/null) || true
     if [ -n "$pid" ] || [ -e "$RC" ]; then break; fi
@@ -94,6 +96,7 @@ start_upgrade() {
   fi
   rm -f "$RC" "$PIDF"
   : > "$LOG"
+  echo "$(date +%s)-$$-$RANDOM$RANDOM" > "$RUN_ID"
   if [ -d /run/systemd/system ] && command -v systemd-run >/dev/null; then
     systemd-run --quiet --collect --unit="pvewarden-upgrade-$(date +%s)" \
       --description="pvewarden: $1" "$SELF" run "$1" >/dev/null

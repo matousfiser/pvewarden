@@ -5,6 +5,7 @@ import sys
 
 from pvewarden import __version__
 from pvewarden.config import DEFAULT_CONFIG_PATH, ConfigError, load, set_client_token
+from pvewarden.errors import WardenError
 from pvewarden.keys import KeyStoreError
 
 
@@ -92,6 +93,31 @@ def key(args: argparse.Namespace) -> None:
         store.remove(args.vmid)
 
 
+def pending(args: argparse.Namespace) -> None:
+    """Updates that fence their guest. 'clear' is for a human who has checked the guest."""
+    import json
+
+    from pvewarden.audit import AuditLog
+    from pvewarden.fence import Fence
+
+    cfg = load(args.config)
+    fence = Fence(cfg.state_dir)
+    if args.action == "list":
+        for vmid in fence.vmids():
+            p = fence.pending(vmid) or {}
+            print(vmid, p.get("state"), p.get("reason", ""), json.dumps({k: p.get(k) for k in ("snapshot", "log")}))
+        return
+    if args.vmid is None:
+        sys.exit("pvewarden pending clear: a VMID is needed")
+    with fence.lock(args.vmid):  # not while the server is working on this guest
+        removed = fence.clear(args.vmid)
+    if removed is None:
+        print(f"guest {args.vmid}: nothing pending", file=sys.stderr)
+        return
+    AuditLog(cfg.state_dir / "audit.jsonl").write("pending_cleared_by_admin", vmid=args.vmid, pending=removed)
+    print(f"guest {args.vmid}: cleared (was {removed.get('state')}); pvewarden may change it again", file=sys.stderr)
+
+
 def verify_new_key(cfg, vmid: int) -> int:
     """Log in to the guest with the key being enrolled. 0 = the guest accepts it."""
     import asyncio
@@ -142,11 +168,15 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("action", choices=["new", "verify", "activate", "remove", "list"])
     p.add_argument("vmid", type=int, nargs="?")
     p.set_defaults(func=key)
+    p = sub.add_parser("pending", help="updates that block their guest; clear one after checking the guest")
+    p.add_argument("action", choices=["list", "clear"])
+    p.add_argument("vmid", type=int, nargs="?")
+    p.set_defaults(func=pending)
 
     args = parser.parse_args(argv)
     try:
         args.func(args)
     except ConfigError as e:
         sys.exit(f"pvewarden: config error: {e}")
-    except KeyStoreError as e:
+    except (KeyStoreError, WardenError) as e:
         sys.exit(f"pvewarden: {e}")

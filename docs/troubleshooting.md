@@ -55,6 +55,16 @@ not know. Use the address from the summary, or add the name to `[http] hostnames
 **"missing the Proxmox tag 'pvewarden-update'":** working as intended. Add the tag in the Proxmox
 UI if agents should update that guest.
 
+**"the last pvewarden update needs a human":** pvewarden cannot tell what happened to an update,
+for example the guest was rebooted while dpkg ran. It blocks every change to that guest until you
+have looked. In the guest, check with `dpkg --audit` (fix with `dpkg --configure -a`) and look at
+`/var/lib/pvewarden/upgrade.log`. Then, in the server container:
+`runuser -u pvewarden -- pvewarden pending clear <vmid>`. `pvewarden pending list` shows what is
+blocked and why.
+
+**"another pvewarden operation on guest … is in progress":** pvewarden makes one change per guest at
+a time. Wait for the other one (often an update) to finish.
+
 **"has no pvewarden key of its own yet":** the guest was enrolled before 0.1.2, or enrolling it
 stopped halfway. Enroll it again: `pvewarden-enroll <vmid>`.
 

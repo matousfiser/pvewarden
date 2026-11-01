@@ -3,7 +3,7 @@
 import asyncio
 import dataclasses
 import ipaddress
-import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,6 +17,7 @@ from pvewarden.errors import (
     PolicyError,
     ProxmoxError,
 )
+from pvewarden.fence import Fence
 from pvewarden.guest import GuestRunner, clean_tail, parse_services, parse_status, parse_upgradable
 from pvewarden.keys import KeyStore
 from pvewarden.proxmox import Guest, ProxmoxClient
@@ -33,7 +34,8 @@ class App:
         self.runner = GuestRunner(cfg.ssh, cfg.state_dir / "known_hosts")
         self.keys = KeyStore(cfg.state_dir / "keys")
         self.runs_dir = cfg.state_dir / "runs"
-        self.pending_dir = cfg.state_dir / "pending"  # updates still running on a guest
+        self.fence = Fence(cfg.state_dir)  # one change per guest at a time; updates still running
+        self.pending_dir = self.fence.pending_dir
 
     # --- inventory and policy ------------------------------------------------------------
 
@@ -93,11 +95,30 @@ class App:
             )
 
     def _no_update_running(self, g: Guest) -> None:
-        if self._pending_file(g.vmid).exists():
-            raise GuestError(
-                f"an update started by pvewarden is still running on guest {g.vmid} ({g.name}); "
-                "call update_result to wait for it first"
-            )
+        p = self.fence.pending(g.vmid)
+        if p is None:
+            return
+        if p.get("state") in ("interrupted", "unreadable", "unknown"):
+            raise GuestError(self._needs_human(g, p.get("reason", "its state is unclear")))
+        raise GuestError(
+            f"an update started by pvewarden is still running on guest {g.vmid} ({g.name}); "
+            "call update_result to wait for it first"
+        )
+
+    def _hold(self, g: Guest, pending: dict, state: str, reason: str) -> None:
+        """Keep the fence (marked for a human) and refuse."""
+        self.fence.update(g.vmid, pending, state=state, reason=reason)
+        self.audit.write("apply_updates_needs_human", vmid=g.vmid, run=pending["run_id"], state=state, reason=reason)
+        raise GuestError(self._needs_human(g, reason))
+
+    @staticmethod
+    def _needs_human(g: Guest, reason: str) -> str:
+        return (
+            f"guest {g.vmid} ({g.name}): the last pvewarden update needs a human: {reason}. pvewarden keeps "
+            "refusing changes to this guest until the user has looked at it (e.g. 'dpkg --audit' in the guest) "
+            f"and cleared it on the server: pvewarden pending clear {g.vmid}. Tell the user; do not try to "
+            "work around it."
+        )
 
     # --- talking to guests ---------------------------------------------------------------
 
@@ -244,8 +265,10 @@ class App:
     async def snapshot(self, vmid: int, description: str = "", client: str | None = None) -> str:
         g = await self.guest(vmid)
         self.require(g, self.cfg.policy.tag_update)
-        self._unlocked(g)
-        return await self._snapshot(g, description, client)
+        with self.fence.lock(vmid, g.name):
+            self._unlocked(g)
+            self._no_update_running(g)
+            return await self._snapshot(g, description, client)
 
     async def update_plan(self, vmid: int, mode: str = "security") -> Guest:
         """Check an update may start now, without changing anything."""
@@ -276,36 +299,60 @@ class App:
         planned: list[str] | None = None,
         client: str | None = None,
     ) -> dict:
-        g = await self.update_plan(vmid, mode)
-        if planned is None:
-            planned = await self.to_install(g, mode)
-        if not planned:  # no snapshot, no apt run: nothing would change
-            self.audit.write("apply_updates_nothing", vmid=vmid, mode=mode)
-            return {"vmid": vmid, "name": g.name, "ok": True, "nothing_to_install": True, "snapshot": None}
-        snap = await self._snapshot(g, f"before {mode} updates", client) if snapshot else None
-        before = await self.services(g)
-        log = self.runs_dir / f"{datetime.now(UTC):%Y%m%d_%H%M%S}_{vmid}_{g.name}_{mode}.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
-        pending = {"mode": mode, "snapshot": snap, "services_before": before, "log": str(log), "planned": planned}
-        self._pending_file(vmid).parent.mkdir(parents=True, exist_ok=True)
-        self._pending_file(vmid).write_text(json.dumps(pending))
-        self.audit.write("apply_updates_start", vmid=vmid, mode=mode, snapshot=snap, log=str(log))
-        return await self._finish_update(g, pending, f"upgrade-{mode}", "a")
+        g = await self.guest(vmid)
+        with self.fence.lock(vmid, g.name):
+            g = await self.update_plan(vmid, mode)  # checked again under the lock
+            if planned is None:
+                planned = await self.to_install(g, mode)
+            if not planned:  # no snapshot, no apt run: nothing would change
+                self.audit.write("apply_updates_nothing", vmid=vmid, mode=mode)
+                return {"vmid": vmid, "name": g.name, "ok": True, "nothing_to_install": True, "snapshot": None}
+            log = self.runs_dir / f"{datetime.now(UTC):%Y%m%d_%H%M%S}_{vmid}_{g.name}_{mode}.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            # the fence goes up before anything changes and outlives this process
+            p = self.fence.begin(vmid, mode=mode, snapshot=None, log=str(log), planned=planned)
+            try:
+                snap = await self._snapshot(g, f"before {mode} updates", client) if snapshot else None
+                before = await self.services(g)
+                # 'started' is written before the command is sent: 'preparing' proves nothing ran
+                p = self.fence.update(vmid, p, state="started", snapshot=snap, services_before=before)
+            except BaseException:
+                self.fence.finish(vmid, p["run_id"])
+                raise
+            self.audit.write("apply_updates_start", vmid=vmid, mode=mode, snapshot=snap, log=str(log), run=p["run_id"])
+            return await self._finish_update(g, p, f"upgrade-{mode}", "a")
 
     async def update_result(self, vmid: int) -> dict:
         """Wait for an update that was still running when apply_updates returned, and report it."""
         g = await self.guest(vmid)
         self.require(g, self.cfg.policy.tag_update)
-        f = self._pending_file(vmid)
-        if not f.exists():
-            raise InvalidRequestError(f"no pvewarden update is running on guest {vmid}; nothing to wait for")
-        return await self._finish_update(g, json.loads(f.read_text()), "upgrade-follow", "w")
-
-    def _pending_file(self, vmid: int) -> Path:
-        return self.pending_dir / f"{vmid}.json"
+        with self.fence.lock(vmid, g.name):
+            p = self.fence.pending(vmid)
+            if p is None:
+                raise InvalidRequestError(f"no pvewarden update is running on guest {vmid}; nothing to wait for")
+            if p.get("state") == "preparing":
+                # stopped before the update command was sent: provably nothing was installed
+                self.fence.finish(vmid, p["run_id"])
+                self.audit.write("apply_updates_never_started", vmid=vmid, run=p["run_id"])
+                return {
+                    "vmid": vmid,
+                    "name": g.name,
+                    "ok": None,
+                    "never_started": True,
+                    "snapshot": p.get("snapshot"),
+                    "hint": "pvewarden stopped before the update was sent to the guest; nothing was installed. "
+                    "It may have taken a snapshot first (list_snapshots).",
+                }
+            if p.get("state") != "started":
+                raise GuestError(self._needs_human(g, p.get("reason", "its state is unclear")))
+            return await self._finish_update(g, p, "upgrade-follow", "w")
 
     async def _finish_update(self, g: Guest, pending: dict, command: str, log_mode: str) -> dict:
+        """Start (upgrade-*) or follow (upgrade-follow) the update and report it. The fence is lifted only
+        when the result provably belongs to this run, or nothing provably ran; when in doubt it stays."""
         log = Path(pending["log"])
+        starting = command != "upgrade-follow"
+        run_id = pending["run_id"]
         base = {
             "vmid": g.vmid,
             "name": g.name,
@@ -313,26 +360,68 @@ class App:
             "planned": pending.get("planned"),
             "log": str(log),
         }
+        # the guest's id of our run, as far as we saw it (following rewrites the log)
+        ours = pending.get("guest_run") or guest_run_id(log)
         try:
             rc, out = await self.run(g, command, log=log, log_mode=log_mode)
         except GuestTimeoutError:
-            self.audit.write("apply_updates_waiting", vmid=g.vmid)
-            return base | {
-                "ok": None,
-                "still_running": True,
-                "hint": "The update keeps running on the guest. Call update_result to wait for it and get "
-                "the result. Do not reboot or roll back the guest meanwhile.",
-            }
-        if command == "upgrade-follow" and ("command not allowed" in out or rc == 4):
-            self._pending_file(g.vmid).unlink(missing_ok=True)
-            raise GuestError(
-                f"guest {g.vmid} ({g.name}) cannot report the update's result (its pvewarden client is older or "
-                "the result is gone). Check it with check_updates; re-enrolling updates the client."
+            seen = guest_run_id(log)
+            if seen and not pending.get("guest_run"):
+                self.fence.update(g.vmid, pending, guest_run=seen)
+            self.audit.write("apply_updates_waiting", vmid=g.vmid, run=run_id)
+            return base | {"ok": None, "still_running": True, "hint": STILL_RUNNING_HINT}
+        except BaseException:
+            if starting and not guest_run_id(log):  # the command never reached the guest
+                self.fence.finish(g.vmid, run_id)
+            raise
+        theirs = guest_run_id(out)
+
+        if rc == 255:  # ssh failed
+            if starting and theirs is None and SSH_NOT_CONNECTED.search(out):
+                self.fence.finish(g.vmid, run_id)  # it never logged in: nothing ran
+                raise GuestError(
+                    f"cannot reach guest {g.vmid} ({g.name}) over SSH; nothing was started: {out.strip()[-300:]}"
+                )
+            # the connection broke (or could not be made to follow): the update goes on detached
+            seen = ours or theirs
+            if seen and not pending.get("guest_run"):
+                self.fence.update(g.vmid, pending, guest_run=seen)
+            self.audit.write("apply_updates_waiting", vmid=g.vmid, run=run_id, ssh=out.strip()[-200:])
+            return base | {"ok": None, "still_running": True, "hint": STILL_RUNNING_HINT}
+
+        if starting:
+            if rc == 75 and "already running" in out:  # someone else's run: ours never started
+                self.fence.finish(g.vmid, run_id)
+                raise GuestError(f"an update is already running on guest {g.vmid} ({g.name}); nothing new was started")
+            ours = ours or theirs
+        else:
+            if rc == 4 and ours is None and "no update has run" in out:
+                # the guest never ran any update and we never saw ours start: provably nothing ran
+                self.fence.finish(g.vmid, run_id)
+                self.audit.write("apply_updates_never_started", vmid=g.vmid, run=run_id)
+                return base | {
+                    "ok": None,
+                    "never_started": True,
+                    "hint": "the update never started on the guest; nothing was installed",
+                }
+            if ours is None or theirs != ours:
+                why = (
+                    "pvewarden cannot tell whether the guest's last update is the one it started"
+                    if theirs or ours
+                    else "the guest cannot report the update's result (outdated client, or its result is gone)"
+                )
+                self._hold(g, pending, "unknown", why)
+
+        if "ended without reporting a result" in out:
+            self._hold(
+                g,
+                pending,
+                "interrupted",
+                "the update process on the guest ended without a result "
+                "(was the guest rebooted or the process killed while dpkg ran?)",
             )
-        if rc == 75 and "already running" in out:
-            self._pending_file(g.vmid).unlink(missing_ok=True)
-            raise GuestError(f"an update is already running on guest {g.vmid} ({g.name}); nothing new was started")
-        self._pending_file(g.vmid).unlink(missing_ok=True)
+
+        self.fence.finish(g.vmid, run_id)
         st = await self.status(g)
         before, after = pending["services_before"], await self.services(g)
         newly_failed = sorted(set(after["failed"]) - set(before["failed"])) if before and after else None
@@ -357,11 +446,12 @@ class App:
     async def reboot(self, vmid: int, wait_s: int = 300, interval: float = 5) -> dict:
         g = await self.guest(vmid)
         self.require(g, self.cfg.policy.tag_reboot)
-        self._unlocked(g)
-        self._no_update_running(g)
-        await self.require_proxmox().reboot(g)
-        self.audit.write("reboot", vmid=vmid)
-        return {"vmid": vmid, "name": g.name, **await self._wait_online(g, wait_s, interval)}
+        with self.fence.lock(vmid, g.name):
+            self._unlocked(g)
+            self._no_update_running(g)
+            await self.require_proxmox().reboot(g)
+            self.audit.write("reboot", vmid=vmid)
+            return {"vmid": vmid, "name": g.name, **await self._wait_online(g, wait_s, interval)}
 
     async def _wait_online(self, g: Guest, wait_s: int, interval: float, check_first: bool = False) -> dict:
         """Wait until the guest answers over SSH again. After a reboot the first check waits:
@@ -404,7 +494,12 @@ class App:
         return {"vmid": vmid, "name": g.name, **{k: found[k] for k in ("description", "created")}, "snapshot": snapshot}
 
     async def rollback(self, vmid: int, snapshot: str, wait_s: int = 300, interval: float = 5) -> dict:
-        await self.rollback_plan(vmid, snapshot)
+        g = await self.guest(vmid)
+        with self.fence.lock(vmid, g.name):
+            return await self._rollback(vmid, snapshot, wait_s, interval)
+
+    async def _rollback(self, vmid: int, snapshot: str, wait_s: int, interval: float) -> dict:
+        await self.rollback_plan(vmid, snapshot)  # checked again under the lock
         g = await self.guest(vmid)
         pve = self.require_proxmox()
         await pve.rollback(g, snapshot)
@@ -419,11 +514,12 @@ class App:
         return res
 
     async def delete_snapshot(self, vmid: int, snapshot: str) -> dict:
-        await self.rollback_plan(vmid, snapshot, "deleted")
         g = await self.guest(vmid)
-        await self.require_proxmox().delete_snapshot(g, snapshot)
-        self.audit.write("delete_snapshot", vmid=vmid, snapshot=snapshot)
-        return {"vmid": vmid, "name": g.name, "deleted": snapshot}
+        with self.fence.lock(vmid, g.name):
+            await self.rollback_plan(vmid, snapshot, "deleted")  # checked again under the lock
+            await self.require_proxmox().delete_snapshot(g, snapshot)
+            self.audit.write("delete_snapshot", vmid=vmid, snapshot=snapshot)
+            return {"vmid": vmid, "name": g.name, "deleted": snapshot}
 
     async def old_snapshots(self, older_than_days: int = 7, vmid: int | None = None) -> list[dict]:
         """pvewarden snapshots older than N days that delete_old_snapshots would remove."""
@@ -446,12 +542,44 @@ class App:
     async def delete_old_snapshots(self, older_than_days: int = 7, vmid: int | None = None) -> list[dict]:
         pve = self.require_proxmox()
         guests = await self.guests()
-        deleted = []
+        deleted, skipped = [], []
         for item in await self.old_snapshots(older_than_days, vmid):
-            await pve.delete_snapshot(guests[item["vmid"]], item["snapshot"])
+            g = guests[item["vmid"]]
+            try:
+                with self.fence.lock(g.vmid, g.name):
+                    self._unlocked(g)
+                    self._no_update_running(g)
+                    await pve.delete_snapshot(g, item["snapshot"])
+            except GuestError as e:  # busy guest: leave its snapshots, go on with the others
+                skipped.append({"vmid": g.vmid, "snapshot": item["snapshot"], "skipped": str(e)})
+                continue
             deleted.append({"vmid": item["vmid"], "snapshot": item["snapshot"]})
-        self.audit.write("delete_old_snapshots", older_than_days=older_than_days, deleted=deleted)
-        return deleted
+        self.audit.write("delete_old_snapshots", older_than_days=older_than_days, deleted=deleted, skipped=skipped)
+        return deleted + skipped
+
+
+STILL_RUNNING_HINT = (
+    "The update keeps running on the guest. Call update_result to wait for it and get the result. "
+    "Do not reboot or roll back the guest meanwhile."
+)
+# ssh's own errors before it logged in: the command was certainly not run
+SSH_NOT_CONNECTED = re.compile(
+    r"Connection refused|Connection timed out|No route to host|Could not resolve|Permission denied|"
+    r"Host key verification failed|Network is unreachable|connect to host .* port"
+)
+GUEST_RUN_RE = re.compile(r"^pvewarden-run: (\S+)$", re.M)
+
+
+def guest_run_id(source: str | Path) -> str | None:
+    """The run id the guest prints first when it starts or follows an update."""
+    if isinstance(source, Path):
+        try:
+            with open(source) as f:
+                source = f.read(4096)
+        except OSError:
+            return None
+    m = GUEST_RUN_RE.search(source)
+    return m.group(1) if m else None
 
 
 def replace_lock(g: Guest, lock: str) -> Guest:
