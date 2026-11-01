@@ -13,9 +13,9 @@ SVC_USER=pvewarden
 
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 
-echo "    apt: installing python3-venv, openssh-client, openssl"
+echo "    apt: installing python3-venv, openssh-client, openssl, logrotate"
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv openssh-client openssl ca-certificates
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv openssh-client openssl ca-certificates logrotate
 
 id "$SVC_USER" >/dev/null 2>&1 || useradd --system --home-dir "$STATE" --shell /usr/sbin/nologin "$SVC_USER"
 install -d -o root -g root -m 0755 "$APP"
@@ -47,6 +47,9 @@ if [ ! -f "$ETC/config.toml" ]; then
 fi
 
 install -o root -g root -m 0644 "$SRC/deploy/pvewarden.service" /etc/systemd/system/
+# the audit log is rotated weekly, run logs older than 180 days are removed
+install -o root -g root -m 0644 "$SRC/deploy/pvewarden.logrotate" /etc/logrotate.d/pvewarden
+install -o root -g root -m 0644 "$SRC/deploy/pvewarden.tmpfiles" /usr/lib/tmpfiles.d/pvewarden.conf
 systemctl daemon-reload
 systemctl enable pvewarden >/dev/null
 

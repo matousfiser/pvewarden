@@ -1,0 +1,13 @@
+# pvewarden audit log: one file per week, a year kept. pvewarden opens it for every record, so a
+# plain rename is safe (no copytruncate, nothing to signal).
+/var/lib/pvewarden/audit.jsonl {
+    weekly
+    rotate 52
+    maxsize 50M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 pvewarden pvewarden
+    su pvewarden pvewarden
+}

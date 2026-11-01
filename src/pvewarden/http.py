@@ -9,6 +9,8 @@ from pvewarden.audit import AuditLog, DeniedLog
 from pvewarden.config import HTTPConfig
 
 CLIENT_KEY = "pvewarden.client"
+# MCP requests are small JSON; anything much bigger is refused before the app reads it
+MAX_BODY = 1 * 2**20
 
 
 class BearerAuth:
@@ -62,8 +64,27 @@ class BearerAuth:
             return await send({"type": "http.response.body", "body": b"unauthorized"})
 
         self.denied.flush()
+        length = dict(scope["headers"]).get(b"content-length", b"0")
+        if not length.isdigit() or int(length) > MAX_BODY:
+            return await self.plain(send, 413, b"request too large")
+        received = 0
+
+        async def limited():
+            # without (or despite) Content-Length: stop reading past the limit
+            nonlocal received
+            msg = await receive()
+            received += len(msg.get("body", b""))
+            if received > MAX_BODY:
+                return {"type": "http.disconnect"}
+            return msg
+
         scope[CLIENT_KEY] = client  # tools read it from the HTTP request (pvewarden.tools.client_name)
-        await self.app(scope, receive, send)
+        await self.app(scope, limited, send)
+
+    @staticmethod
+    async def plain(send, status: int, body: bytes) -> None:
+        await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"text/plain")]})
+        await send({"type": "http.response.body", "body": body})
 
 
 def allowed_hosts(cfg: HTTPConfig) -> list[str]:

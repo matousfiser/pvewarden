@@ -5,17 +5,22 @@ refused there. The check here only catches programming errors early.
 """
 
 import asyncio
+import codecs
 import contextlib
 import re
 from pathlib import Path
 
 from pvewarden.config import SSHConfig
-from pvewarden.errors import GuestTimeoutError
+from pvewarden.errors import GuestError, GuestTimeoutError
 
 COMMANDS = frozenset({"check", "status", "services", "upgrade-security", "upgrade-all", "upgrade-follow"})
 
 
 class GuestRunner:
+    # A compromised guest controls its output: more than this is refused (memory and run logs).
+    # A full apt run with many packages stays far below it.
+    max_output = 16 * 2**20
+
     def __init__(self, cfg: SSHConfig, known_hosts: Path):
         self.cfg = cfg
         self.known_hosts = known_hosts
@@ -62,23 +67,44 @@ class GuestRunner:
                 stderr=asyncio.subprocess.STDOUT,
             )
             chunks: list[str] = []
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
             async def pump() -> None:
+                received = 0
                 with open(log, log_mode) if log else contextlib.nullcontext() as f:
-                    async for raw in proc.stdout:
-                        line = raw.decode(errors="replace")
-                        chunks.append(line)
+                    # in blocks, not lines: a guest that sends one endless line must not break this
+                    while block := await proc.stdout.read(65536):
+                        received += len(block)
+                        if received > self.max_output:
+                            raise GuestError(
+                                f"{command} on {address}: the guest sent more than "
+                                f"{self.max_output // 2**20} MiB of output; stopped reading"
+                            )
+                        text = decoder.decode(block)
+                        chunks.append(text)
                         if f:
-                            f.write(line)
+                            f.write(text)
                             f.flush()
+                    chunks.append(decoder.decode(b"", final=True))
                 await proc.wait()
 
             try:
                 await asyncio.wait_for(pump(), timeout)
             except TimeoutError:
-                proc.kill()
+                await stop(proc)
                 raise GuestTimeoutError(f"{command} on {address}: no result after {timeout}s") from None
+            except BaseException:
+                await stop(proc)
+                raise
         return proc.returncode, "".join(chunks)
+
+
+async def stop(proc: asyncio.subprocess.Process) -> None:
+    """Stop the local ssh client (never the update on the guest) and reap it."""
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(proc.wait(), 5)
 
 
 # --- output parsers -------------------------------------------------------------------------

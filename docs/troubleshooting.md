@@ -19,8 +19,8 @@ All paths are in the server container.
 | What | Where |
 |---|---|
 | Server log, errors | `journalctl -u pvewarden` |
-| Every tool call and its outcome | `/var/lib/pvewarden/audit.jsonl` |
-| Full apt output of each update | `/var/lib/pvewarden/runs/<time>_<vmid>_<name>_<mode>.log` |
+| Every tool call and its outcome | `/var/lib/pvewarden/audit.jsonl` (rotated weekly, a year kept) |
+| Full apt output of each update | `/var/lib/pvewarden/runs/<time>_<vmid>_<name>_<mode>.log` (kept 180 days) |
 | Snapshots, rollbacks, reboots | Proxmox UI → node → Task History (user `pvewarden@pve`) |
 | The last update, on the guest itself | `/var/lib/pvewarden/upgrade.log` |
 

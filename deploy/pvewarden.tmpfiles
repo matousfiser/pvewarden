@@ -1,0 +1,2 @@
+# pvewarden: full apt output of each update (one file per run), removed after 180 days
+e /var/lib/pvewarden/runs - - - 180d

@@ -37,6 +37,13 @@
   instead of one line each, so a flood of them cannot fill the disk.
 - The HTTP layer no longer reads every request body into memory for the audit log.
 
+**Limits**
+- Requests larger than 1 MiB are refused (413), also when they are streamed.
+- More than 16 MiB of output from one guest command is refused; the run log stays as small. Output
+  is read in blocks, so one endless line from a guest cannot break reading.
+- The server rotates its audit log weekly (a year kept, `logrotate`) and removes run logs older than
+  180 days (`systemd-tmpfiles`).
+
 ## 0.1.1 (2026-11-01)
 
 - `pvewarden-setup`: the install summary, `connect` and `token` output are laid out in clear
