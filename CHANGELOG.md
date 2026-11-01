@@ -65,6 +65,7 @@
   (dialog, or `PVEWARDEN_ADOPT_EXISTING=yes`). Before, it rewrote an existing `Warden` role's
   privileges and `uninstall` deleted such objects. `uninstall` now deletes only what the installer
   created or took over (`/etc/pvewarden/owned.conf`); upgrades record the objects of older installs.
+- When a step fails, `pvewarden-setup` says so instead of stopping without a word.
 
 ## 0.1.1 (2026-11-01)
 

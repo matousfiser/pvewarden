@@ -57,6 +57,7 @@ esac
     case "$*" in
       *chpasswd*) cat > "$FAKE/chpasswd.stdin" ;;
       "ip -4 -o addr show dev eth0") echo "2: eth0    inet 192.0.2.50/24 brd 192.0.2.255 scope global eth0" ;;
+      *install-server.sh*) [ -z "$FAKE_SERVER_INSTALL_FAILS" ] || exit 1 ;;
       *python3*) echo "192.0.2.0/24" ;;
       "test -f /etc/pvewarden/id_ed25519") [ -f "$FAKE/shared_key" ] ;;
       "/usr/local/bin/pvewarden token "*) sleep "${FAKE_DELAY:-0}"; echo "NEW-TOKEN-FOR-${@: -1}"; echo "noise on stderr" >&2 ;;
@@ -553,6 +554,21 @@ def test_upgrade(host):
     assert "ENROLL --all" in calls
     assert not any(c.startswith(("pct create", "pveum user token")) for c in calls)  # keeps the existing token
     assert (host.path / "opt/proxmox/pvewarden-setup").exists()
+
+
+def test_a_failing_step_is_reported_not_silent(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    host.mark("ct")
+    r = host.run("upgrade", "--yes", FAKE_SERVER_INSTALL_FAILS="1")
+    assert r.returncode != 0
+    assert "a step failed (exit 1)" in r.stderr
+    assert "pct exec 120 -- systemctl restart pvewarden" not in host.calls()
+
+
+def test_die_does_not_add_the_generic_failure_message(host):
+    r = host.run("upgrade", "--yes")  # nothing installed
+    assert "no installation found" in r.stderr and "a step failed" not in r.stderr
 
 
 def upgrade_from_0_1_1(host, **env):

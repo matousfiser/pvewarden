@@ -71,4 +71,6 @@ systemctl enable pvewarden >/dev/null
 
 echo
 echo "Installed $("$APP/venv/bin/pvewarden" --version)."
-[ "$FRESH" = 1 ] && echo "Next: edit $ETC/config.toml ([proxmox]), then check: runuser -u $SVC_USER -- pvewarden doctor"
+if [ "$FRESH" = 1 ]; then
+  echo "Next: edit $ETC/config.toml ([proxmox]), then check: runuser -u $SVC_USER -- pvewarden doctor"
+fi

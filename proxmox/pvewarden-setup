@@ -36,10 +36,14 @@ TAG_REBOOT=pvewarden-reboot
 DRY_RUN=0 YES=0 SOURCE="" COMMAND=""
 WORK=$(mktemp -d)
 CREATED_CT=""  # set once a container exists, so a failed install can say what it left behind
+DIED=0         # die() has said why; any other non-zero exit is a step that failed
 cleanup() {
   local rc=$?
   [ -z "$TICKER" ] || kill "$TICKER" 2>/dev/null || true
   rm -rf "$WORK"
+  if [ "$rc" != 0 ] && [ "$DIED" = 0 ]; then
+    echo "pvewarden-setup: a step failed (exit $rc); nothing after the output above was done." >&2
+  fi
   if [ "$rc" != 0 ] && [ -n "$CREATED_CT" ]; then
     echo "pvewarden-setup: the install stopped; container $CREATED_CT was already created." >&2
     echo "  inspect it:  pct start $CREATED_CT --debug" >&2
@@ -54,6 +58,7 @@ trap cleanup EXIT
 
 die() {
   echo "pvewarden-setup: $*" >&2
+  DIED=1
   exit 1
 }
 info() { echo ">>> $*"; }
