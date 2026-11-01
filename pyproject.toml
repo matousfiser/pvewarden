@@ -1,6 +1,6 @@
 [project]
 name = "pvewarden"
-version = "0.1.2"
+version = "0.1.3"
 description = "Agent-safe patching of Proxmox VE guests over MCP"
 readme = "README.md"
 license = "Apache-2.0"

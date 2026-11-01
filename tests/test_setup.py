@@ -60,6 +60,7 @@ esac
       *install-server.sh*) [ -z "$FAKE_SERVER_INSTALL_FAILS" ] || exit 1 ;;
       *python3*) echo "192.0.2.0/24" ;;
       "test -f /etc/pvewarden/id_ed25519") [ -f "$FAKE/shared_key" ] ;;
+      "/usr/local/bin/pvewarden --version") echo "pvewarden ${FAKE_SERVER_VERSION:-0.0.1}" ;;
       "/usr/local/bin/pvewarden token "*) sleep "${FAKE_DELAY:-0}"; echo "NEW-TOKEN-FOR-${@: -1}"; echo "noise on stderr" >&2 ;;
       "test -f /etc/pvewarden/tls.crt") [ -z "$FAKE_NO_TLS" ] ;;
       "cat /etc/pvewarden/tls.crt") cat "$FAKE/pushed/_etc_pvewarden_tls.crt" 2>/dev/null ;;
@@ -69,7 +70,11 @@ esac
 esac
 """,
     "whiptail": 'echo "whiptail must not be called with --yes" >&2; exit 1\n',
-    "curl": """url=${@: -1} out=""
+    "curl": """case "$*" in
+  *releases/latest*) [ -n "${FAKE_LATEST:-}" ] || exit 6
+    echo -n "https://github.com/matousfiser/pvewarden/releases/tag/v$FAKE_LATEST"; exit 0 ;;
+esac
+url=${@: -1} out=""
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" = -o ] && out=${args[i+1]} && url=${args[i-1]}; done
 case "$url" in
@@ -850,3 +855,70 @@ def test_refuses_a_tampered_release(host, release):
     release["tarball"].write_bytes(release["tarball"].read_bytes() + b"x")
     r = host.run("install", "--yes", "--dry-run", source=False, script=release["script"], **INSTALL_ENV)
     assert r.returncode != 0 and "checksum mismatch" in r.stderr
+
+
+# --- upgrade: the newest setup, never a downgrade -----------------------------------------------
+
+
+def installed(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    (host.state / "owned.conf").write_text("POOL=1\n")
+    host.mark("ct")
+
+
+def newer_setup(host, body='echo "NEWER SETUP: $* switched=$PVEWARDEN_SETUP_SWITCHED"; exit 3', tamper=False):
+    rel = host.path / "fake/release"
+    rel.mkdir(exist_ok=True)
+    script = rel / "pvewarden-setup"
+    script.write_text("#!/bin/bash\n" + body + "\n")
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    (rel / "SHA256SUMS").write_text(f"{'0' * 64}  pvewarden-9.9.9.tar.gz\n{digest}  pvewarden-setup\n")
+    if tamper:
+        script.write_text(script.read_text() + "# changed\n")
+
+
+def test_an_old_setup_switches_to_the_newest_one_before_upgrading(host, release):
+    installed(host)
+    newer_setup(host)
+    r = host.run("upgrade", "--yes", source=False, script=release["script"], FAKE_LATEST="9.9.9")
+    assert "switching to its pvewarden-setup" in r.stdout
+    assert "NEWER SETUP: upgrade --yes switched=1" in r.stdout  # it does the upgrade, and cannot loop
+    assert r.returncode == 3  # its result is the result
+    assert not any(c.startswith("pct exec 120 -- bash") for c in host.calls())  # the old one changed nothing
+
+
+def test_a_tampered_newest_setup_is_not_run(host, release):
+    installed(host)
+    newer_setup(host, tamper=True)
+    r = host.run("upgrade", "--yes", source=False, script=release["script"], FAKE_LATEST="9.9.9")
+    assert r.returncode != 0 and "checksum mismatch" in r.stderr and "NEWER SETUP" not in r.stdout
+
+
+def test_the_newest_setup_upgrades_itself(host, release):
+    installed(host)
+    r = host.run("upgrade", "--yes", source=False, script=release["script"], FAKE_LATEST=release["version"])
+    assert r.returncode == 0, r.stderr
+    assert "switching" not in r.stdout
+    assert f"download/v{release['version']}/pvewarden-{release['version']}.tar.gz" in r.stdout
+
+
+def test_without_github_the_script_upgrades_to_its_own_version(host, release):
+    installed(host)
+    r = host.run("upgrade", "--yes", source=False, script=release["script"])  # FAKE_LATEST unset: no answer
+    assert r.returncode == 0, r.stderr
+    assert "could not find the newest release" in r.stdout
+
+
+def test_a_downgrade_is_refused_before_any_change(host):
+    installed(host)
+    r = host.run("upgrade", "--yes", FAKE_SERVER_VERSION="99.0.0")
+    assert r.returncode != 0 and "server runs pvewarden 99.0.0" in r.stderr
+    assert not any(c.startswith(("pct exec 120 -- bash", "pct push")) for c in host.calls())
+
+
+def test_a_downgrade_when_asked_for(host):
+    installed(host)
+    r = host.run("upgrade", "--yes", "--allow-downgrade", FAKE_SERVER_VERSION="99.0.0")
+    assert r.returncode == 0, r.stderr
+    assert "downgrading the server from 99.0.0" in r.stdout

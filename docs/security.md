@@ -146,7 +146,7 @@ What a pvewarden snapshot is, so you know what a rollback brings back:
 - **Which snapshots are pvewarden's** is decided by the name prefix `pvewarden_`. A snapshot someone
   else names that way can be rolled back to or deleted by an agent with the update tag. Not closed;
   accepted as lower priority because rollback and deletion require your confirmation in the client,
-  which the agent cannot give. Planned for 0.1.3: a record of the snapshots pvewarden took.
+  which the agent cannot give. Planned for 0.1.4: a record of the snapshots pvewarden took.
 - **A shared `[ssh] key`** is still accepted for guests whose address you fix in `[addresses]` (or
   static guests). There the address comes from you, not from a guest, so a guest cannot redirect
   it, but one key opens all of those guests. Prefer `pvewarden key new` per guest.

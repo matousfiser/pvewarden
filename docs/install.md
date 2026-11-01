@@ -10,7 +10,7 @@ arguments it shows a menu. With a command it goes straight to that task:
 | `connect` | Show again how to connect an agent (without the token) |
 | `token [name]` | Give an agent a new token; the old one stops working at once |
 | `renew-cert` | New HTTPS certificate, e.g. after the server's address changed |
-| `upgrade` | Update the server and the host tools to this script's version |
+| `upgrade` | Update the server and the host tools to the newest release |
 | `uninstall` | Remove pvewarden from guests, Proxmox and this host |
 
 Options: `--dry-run` shows what would be done and changes nothing. `--yes` answers every question
@@ -105,10 +105,24 @@ hides it from pvewarden entirely.
 
 ## Upgrade
 
-Download the new `pvewarden-setup` and run:
+On the Proxmox host:
 
 ```
-bash pvewarden-setup upgrade
+pvewarden-setup upgrade
+```
+
+Since 0.1.3 the installed `pvewarden-setup` first fetches the newest release's `pvewarden-setup`,
+checks its checksum and lets it do the upgrade. It never installs an older version than the server
+runs (`--allow-downgrade` if you mean it).
+
+**From 0.1.2 or older:** the installed script only knows its own version and would install that
+again (0.1.0 and 0.1.1 even downgrade the server). Download the current one first:
+
+```
+curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pvewarden-setup
+curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+bash ./pvewarden-setup upgrade
 ```
 
 This updates the server in its container and the tools on the host. The configuration, tokens, guest

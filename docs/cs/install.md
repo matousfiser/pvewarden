@@ -10,7 +10,7 @@ ukáže menu, s příkazem jde rovnou na věc:
 | `connect` | Znovu ukáže, jak připojit agenta (bez tokenu) |
 | `token [jméno]` | Dá agentovi nový token; starý okamžitě přestane platit |
 | `renew-cert` | Nový HTTPS certifikát, např. po změně adresy serveru |
-| `upgrade` | Aktualizuje server a nástroje na hostu na verzi tohoto skriptu |
+| `upgrade` | Aktualizuje server a nástroje na hostu na nejnovější release |
 | `uninstall` | Odstraní pvewarden z hostů, z Proxmoxu i z tohoto nodu |
 
 Volby: `--dry-run` jen ukáže, co by se stalo. `--yes` vezme výchozí odpovědi nebo proměnné
@@ -98,10 +98,24 @@ je host pro agenty jen ke čtení. Host vyřazený z poolu `pvewarden` pro pvewa
 
 ## Aktualizace pvewarden
 
-Stáhni nový `pvewarden-setup` a spusť:
+Na Proxmox hostu:
 
 ```
-bash pvewarden-setup upgrade
+pvewarden-setup upgrade
+```
+
+Od 0.1.3 si nainstalovaný `pvewarden-setup` nejdřív stáhne `pvewarden-setup` z nejnovějšího
+releasu, ověří jeho kontrolní součet a upgrade nechá na něm. Nikdy nenainstaluje starší verzi, než
+na serveru běží (pokud to opravdu chceš: `--allow-downgrade`).
+
+**Z verze 0.1.2 a starší:** nainstalovaný skript zná jen svou verzi a nainstaloval by ji znovu
+(0.1.0 a 0.1.1 dokonce server downgradují). Nejdřív stáhni aktuální:
+
+```
+curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pvewarden-setup
+curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+bash ./pvewarden-setup upgrade
 ```
 
 Aktualizuje server v kontejneru a nástroje na hostu. Konfigurace, tokeny, klíče hostů, audit log

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3 (2026-11-02)
+
+- `pvewarden-setup upgrade` first switches to the newest release's `pvewarden-setup` (checksum
+  checked) and lets it do the upgrade. Before, the installed script installed its own version, so
+  an old script could downgrade the server: 0.1.0's setup put 0.1.0 back over 0.1.2.
+- The upgrade refuses to install an older version than the server runs, before changing anything
+  (`--allow-downgrade` to do it anyway).
+- **Upgrading from 0.1.2 or older:** download the current `pvewarden-setup` first (docs/install.md).
+
 ## 0.1.2 (2026-11-01)
 
 **Security**
@@ -63,7 +72,7 @@
 - The security model documents what a snapshot is (disk only, crash-consistent; file system
   consistent with the guest agent's freeze) and what that means for databases.
 - Open, accepted as lower priority for now: snapshots are recognised as pvewarden's by their name
-  prefix alone (rollback and deletion still need the user's confirmation). Planned for 0.1.3.
+  prefix alone (rollback and deletion still need the user's confirmation). Planned for a later release.
 
 **Installer**
 - A pool, role or user with pvewarden's names that the installer did not create is no longer taken
