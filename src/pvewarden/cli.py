@@ -5,6 +5,7 @@ import sys
 
 from pvewarden import __version__
 from pvewarden.config import DEFAULT_CONFIG_PATH, ConfigError, load, set_client_token
+from pvewarden.keys import KeyStoreError
 
 
 def serve(args: argparse.Namespace) -> None:
@@ -68,6 +69,54 @@ def token(args: argparse.Namespace) -> None:
     )
 
 
+def key(args: argparse.Namespace) -> None:
+    """Per-guest SSH keys; pvewarden-enroll calls these steps in order: new, verify, activate."""
+    from pvewarden.keys import KeyStore
+
+    cfg = load(args.config)
+    store = KeyStore(cfg.state_dir / "keys")
+    if args.action == "list":
+        for vmid in store.vmids():
+            print(vmid)
+        return
+    if args.vmid is None:
+        sys.exit(f"pvewarden key {args.action}: a VMID is needed")
+    if args.action == "new":
+        print(store.new(args.vmid))
+    elif args.action == "verify":
+        sys.exit(verify_new_key(cfg, args.vmid))
+    elif args.action == "activate":
+        store.activate(args.vmid)
+        print(f"guest {args.vmid}: new key active", file=sys.stderr)
+    elif args.action == "remove":
+        store.remove(args.vmid)
+
+
+def verify_new_key(cfg, vmid: int) -> int:
+    """Log in to the guest with the key being enrolled. 0 = the guest accepts it."""
+    import asyncio
+
+    from pvewarden.app import App
+    from pvewarden.errors import WardenError
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    async def check() -> int:
+        app = App(cfg)
+        try:
+            g = await app.guest(vmid)
+            rc, out = await app.run(g, "status", new_key=True, timeout=60)
+        except WardenError as e:
+            print(f"guest {vmid}: {e}", file=sys.stderr)
+            return 1
+        if rc != 0:
+            print(f"guest {vmid}: the new key was not accepted: {out.strip()[-300:]}", file=sys.stderr)
+            return 1
+        return 0
+
+    return asyncio.run(check())
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="pvewarden", description="Agent-safe patching of Proxmox VE guests over MCP")
     parser.add_argument("--version", action="version", version=f"pvewarden {__version__}")
@@ -89,9 +138,15 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("token", help="give an HTTP client a new random token (rotation) and print it")
     p.add_argument("name", nargs="?", default="agent", help="client name in [http.clients] (default: agent)")
     p.set_defaults(func=token)
+    p = sub.add_parser("key", help="per-guest SSH keys (used by pvewarden-enroll)")
+    p.add_argument("action", choices=["new", "verify", "activate", "remove", "list"])
+    p.add_argument("vmid", type=int, nargs="?")
+    p.set_defaults(func=key)
 
     args = parser.parse_args(argv)
     try:
         args.func(args)
     except ConfigError as e:
         sys.exit(f"pvewarden: config error: {e}")
+    except KeyStoreError as e:
+        sys.exit(f"pvewarden: {e}")

@@ -27,6 +27,7 @@ class FakeRunner:
 
     def __init__(self):
         self.calls: list[tuple[str, str]] = []
+        self.keys: list[tuple[str, str]] = []  # (command, key file name) per call
         self.responses: dict[str, tuple[int, str]] = {
             "check": (0, CHECK_OUT),
             "status": (0, STATUS_OUT),
@@ -35,8 +36,9 @@ class FakeRunner:
             "upgrade-all": (0, "All upgrades installed\n"),
         }
 
-    async def run(self, address, command, timeout=1800, log: Path | None = None, log_mode="a"):
+    async def run(self, address, command, timeout=1800, log: Path | None = None, log_mode="a", *, key, alias=None):
         self.calls.append((address, command))
+        self.keys.append((command, Path(key).name))
         resp = self.responses[command]
         rc, out = resp(address) if callable(resp) else resp
         if log:
@@ -108,7 +110,7 @@ def make_config(tmp_path: Path, **extra) -> dict:
     return {
         "state_dir": str(tmp_path / "state"),
         "proxmox": {"host": "pve.test", "token_id": "pvewarden@pve!t", "token_secret": "s3cret"},
-        "ssh": {"key": str(tmp_path / "id_ed25519"), "subnets": ["192.0.2.0/24"]},
+        "ssh": {"subnets": ["192.0.2.0/24"]},  # guests have their own keys (conftest.give_key)
         **extra,
     }
 
@@ -127,4 +129,11 @@ def app(tmp_path):
     a.pve = FakeProxmox(GUESTS)
     a.pve.ips = {101: ["127.0.0.1", "192.0.2.11"], 102: ["192.0.2.12"], 103: ["192.0.2.13"], 104: ["192.0.2.14"]}
     a.runner = FakeRunner()
+    for g in GUESTS:  # enrolled: every guest has its own key
+        give_key(a, g.vmid)
     return a
+
+
+def give_key(app, vmid: int) -> None:
+    app.keys.path.mkdir(parents=True, exist_ok=True)
+    (app.keys.path / str(vmid)).write_text("private key")

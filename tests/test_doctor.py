@@ -12,8 +12,6 @@ FULL = {"VM.Audit", "VM.Snapshot", "VM.Snapshot.Rollback", "VM.PowerMgmt", "VM.G
 
 @pytest.fixture
 def healthy(app, tmp_path):
-    app.cfg.ssh.key.write_text("key")
-    app.cfg.ssh.key.chmod(0o600)
     app.pve.privs = {f"/vms/{v}": set(FULL) for v in (101, 102, 103, 104)}
     app.pve.privs["/pool/pvewarden"] = set(FULL)
     return app
@@ -104,14 +102,25 @@ async def test_ssh_failures_are_explained(healthy, ssh_output, hint):
 
 
 def test_local_checks(app, tmp_path):
+    from dataclasses import replace
+
     results = by_title(check_local(app))
-    assert results["SSH key"].status == "fail" and "ssh-keygen" in results["SSH key"].hint
-    app.cfg.ssh.key.write_text("key")
-    app.cfg.ssh.key.chmod(0o644)
-    assert by_title(check_local(app))["SSH key"].status == "fail"  # world-readable
-    app.cfg.ssh.key.chmod(0o600)
-    assert by_title(check_local(app))["SSH key"].status == "ok"
-    assert by_title(check_local(app))["State directory"].status == "ok"
+    assert results["State directory"].status == "ok"
+    assert results["Guest SSH keys"].detail.startswith("4 guest(s) with their own key")
+    assert "Shared SSH key" not in results  # not configured: nothing to check
+
+    key = tmp_path / "shared_key"
+    app.cfg = replace(app.cfg, ssh=replace(app.cfg.ssh, key=key))
+    # no guest may use it (no [addresses]): say it can go
+    assert by_title(check_local(app))["Shared SSH key"].status == "warn"
+
+    app.cfg = replace(app.cfg, addresses={101: "192.0.2.11"})
+    assert "ssh-keygen" in by_title(check_local(app))["Shared SSH key"].hint  # missing
+    key.write_text("key")
+    key.chmod(0o644)
+    assert by_title(check_local(app))["Shared SSH key"].status == "fail"  # world-readable
+    key.chmod(0o600)
+    assert by_title(check_local(app))["Shared SSH key"].status == "ok"
 
 
 def test_listen_address_must_exist(app):

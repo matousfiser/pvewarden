@@ -19,7 +19,7 @@ example is [config.example.toml](../config.example.toml).
 
 | Key | Default | |
 |---|---|---|
-| `state_dir` | `/var/lib/pvewarden` | Audit log (`audit.jsonl`), full apt output of every update (`runs/`), SSH `known_hosts`, updates still running (`pending/`) |
+| `state_dir` | `/var/lib/pvewarden` | Audit log (`audit.jsonl`), full apt output of every update (`runs/`), the guests' SSH keys (`keys/<vmid>`), SSH `known_hosts`, updates still running (`pending/`) |
 
 ## `[proxmox]`
 
@@ -39,7 +39,7 @@ How the server reaches guests.
 
 | Key | Default | |
 |---|---|---|
-| `key` | – (required) | Private key; its public half is what enrolling installs on guests |
+| `key` | – | A shared key, **only** for guests whose address is fixed in `[addresses]` or `static_guests`. Other guests always use their own key from `state_dir/keys`, made when they are enrolled. |
 | `user` | `pvewarden` | |
 | `subnets` | `[]` | Guests often report several addresses (Docker bridges, VPNs). pvewarden uses the first one inside these networks. Empty: the first non-loopback IPv4. |
 | `parallel` | `5` | At most this many SSH sessions at once, e.g. during `check_updates` on all guests |

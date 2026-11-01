@@ -109,10 +109,14 @@ Download the new `pvewarden-setup` and run:
 bash pvewarden-setup upgrade
 ```
 
-This updates the server in its container and the tools on the host. The configuration, tokens, SSH
-key, audit log and certificate are kept. It then offers to refresh the client on every enrolled guest
-(`pvewarden-enroll --all`). Say yes unless you know the guest client did not change. Guests keep
-their automatic-updates setting.
+This updates the server in its container and the tools on the host. The configuration, tokens, guest
+keys, audit log and certificate are kept. It then offers to enroll every guest again
+(`pvewarden-enroll --all`), which updates their client. Say yes unless you know the guest client did
+not change. Guests keep their automatic-updates setting.
+
+**From 0.1.1 or older:** guests used to share one SSH key; since 0.1.2 each has its own. Enrolling
+again switches them, and the server refuses a guest until it is switched. Once every guest has its
+own key, the upgrade removes the old shared key from the server.
 
 ## Uninstall
 
@@ -168,7 +172,7 @@ On PVE 8 use `VM.Monitor` instead of `VM.GuestAgent.Audit`. Keep the token secre
 deploy/install-server.sh <listen-address>
 ```
 
-It installs the server into `/opt/pvewarden`, creates the service user and an SSH key, and writes
+It installs the server into `/opt/pvewarden`, creates the service user, and writes
 `/etc/pvewarden/config.toml` with a fresh agent token. Fill in the `[proxmox]` section (see
 [configuration.md](configuration.md)), then check and start:
 
@@ -177,10 +181,26 @@ runuser -u pvewarden -- pvewarden doctor
 systemctl start pvewarden
 ```
 
-**3. Guests:** copy the `guest/` directory to each guest and run, as root:
+**3. Guests:** add the guest to the `pvewarden` pool and set its tags in the Proxmox UI. Each guest
+gets its own key. On the server, make it:
 
 ```
-guest/install.sh "<contents of /etc/pvewarden/id_ed25519.pub>" <server address as the guest sees it>
+runuser -u pvewarden -- pvewarden key new <vmid>
 ```
 
-Then add the guest to the `pvewarden` pool and set its tags in the Proxmox UI.
+Copy the `guest/` directory to the guest and run, as root, with the printed public key:
+
+```
+guest/install.sh "<public key>" <server address as the guest sees it>
+```
+
+Back on the server, check the key works, then make it active:
+
+```
+runuser -u pvewarden -- pvewarden key verify <vmid>
+runuser -u pvewarden -- pvewarden key activate <vmid>
+```
+
+`pvewarden-enroll` does the same from a Proxmox node. To use it with a server outside Proxmox, set
+`SERVER_CMD` in `/etc/pvewarden/enroll.conf` to a command that runs `pvewarden` on the server, e.g.
+`SERVER_CMD="ssh root@warden runuser -u pvewarden -- pvewarden"`, plus `FROM=<server address>`.

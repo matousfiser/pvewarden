@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+**Security**
+- Every guest has its own SSH key, made on the server when the guest is enrolled. Before, guests
+  shared one key and the server connected to whatever address a guest reported, so a compromised
+  guest with the update tag could report another guest's address and have updates run there
+  without a snapshot and without that guest's tags. Now the server picks the key by VMID and the
+  other guest refuses it. Guest host keys are remembered per VMID too.
+- Enrolling switches a guest to its new key in checked steps and never leaves it half switched: if a
+  step fails, the server refuses the guest until it is enrolled again. Re-enrolling rotates the key.
+- **Upgrading:** `pvewarden-setup upgrade` enrolls the guests again and then removes the old shared
+  key. Guests that are not enrolled again are refused ("has no pvewarden key of its own yet").
+- A shared `[ssh] key` is still possible, but only for guests whose address is fixed in the config.
+- New `pvewarden key new|verify|activate|remove|list` for manual installs.
+
 ## 0.1.1 (2026-11-01)
 
 - `pvewarden-setup`: the install summary, `connect` and `token` output are laid out in clear

@@ -588,7 +588,6 @@ verify_tls = $VERIFY
 
 [ssh]
 user = "pvewarden"
-key = "$CT_ETC/id_ed25519"
 subnets = ["$subnet"]
 
 [policy]
@@ -683,14 +682,16 @@ install_enroll_tool() {
   run cp -r "$WORK/src/guest" "$WORK/src/proxmox" "$HOST_DIR/"
   run ln -sf "$HOST_DIR/proxmox/pvewarden-enroll" "$SBIN/pvewarden-enroll"
   run ln -sf "$HOST_DIR/proxmox/pvewarden-setup" "$SBIN/pvewarden-setup"
-  local pubkey
-  if [ "$DRY_RUN" = 1 ]; then pubkey="ssh-ed25519 DRYRUN"; else
-    pubkey=$(pct exec "$CTID" -- cat "$CT_ETC/id_ed25519.pub")
-  fi
+  write_enroll_conf
+}
+
+# enroll.conf: where pvewarden-enroll finds the server (it makes each guest's key there)
+write_enroll_conf() {
   if [ "$DRY_RUN" = 1 ]; then
-    echo "would write $ETC/enroll.conf: PUBKEY=$pubkey FROM=$CT_IP POOL=$POOL"
+    echo "would write $ETC/enroll.conf: SERVER_CT=$CTID FROM=$CT_IP POOL=$POOL"
   else
-    printf 'PUBKEY=%q\nFROM=%q\nPOOL=%q\n' "$pubkey" "$CT_IP" "$POOL" > "$ETC/enroll.conf"
+    printf '# written by pvewarden-setup %s\nSERVER_CT=%q\nFROM=%q\nPOOL=%q\n' "$VERSION" "$CTID" "$CT_IP" "$POOL" \
+      > "$ETC/enroll.conf"
   fi
 }
 
@@ -878,8 +879,14 @@ do_upgrade() {
   CT_IP=${CT_IP:-$LISTEN}
   install_enroll_tool_keep_conf
   save_state
-  if confirm "Update the client on every enrolled guest too (pvewarden-enroll --all)?"; then
-    run "$SBIN/pvewarden-enroll" --all || true
+  if confirm "Enroll every guest in pool $POOL again (pvewarden-enroll --all)?\n\nThis updates the client on the guests and gives each guest its own SSH key. Since 0.1.2 the server refuses guests that have no key of their own, so say yes unless you will run pvewarden-enroll yourself."; then
+    if run "$SBIN/pvewarden-enroll" --all; then
+      remove_shared_key
+    else
+      echo "some guests were not switched: the server refuses them until they are enrolled again (pvewarden-enroll <vmid>)"
+    fi
+  else
+    echo "guests are refused until they are enrolled again: pvewarden-enroll --all"
   fi
   start_server
 }
@@ -888,6 +895,25 @@ install_enroll_tool_keep_conf() {
   run rm -rf "$HOST_DIR/guest" "$HOST_DIR/proxmox"
   run mkdir -p "$HOST_DIR"
   run cp -r "$WORK/src/guest" "$WORK/src/proxmox" "$HOST_DIR/"
+  # before 0.1.2: a shared key (PUBKEY) instead of the server (SERVER_CT); keep FROM and POOL as set
+  if [ -f "$ETC/enroll.conf" ] && ! grep -q '^SERVER_CT=' "$ETC/enroll.conf"; then
+    if [ "$DRY_RUN" = 1 ]; then
+      echo "would add SERVER_CT=$CTID to $ETC/enroll.conf and drop PUBKEY"
+    else
+      sed -i '/^PUBKEY=/d' "$ETC/enroll.conf"
+      printf 'SERVER_CT=%q\n' "$CTID" >> "$ETC/enroll.conf"
+    fi
+  elif [ ! -f "$ETC/enroll.conf" ]; then
+    write_enroll_conf
+  fi
+}
+
+# remove_shared_key: once every guest has its own key, the old shared key (before 0.1.2) is unused
+remove_shared_key() {
+  pct exec "$CTID" -- test -f "$CT_ETC/id_ed25519" 2>/dev/null || [ "$DRY_RUN" = 1 ] || return 0
+  info "every guest has its own key now: removing the old shared SSH key from the server"
+  run pct exec "$CTID" -- sed -i '/^key = /d' "$CT_ETC/config.toml"
+  run pct exec "$CTID" -- rm -f "$CT_ETC/id_ed25519" "$CT_ETC/id_ed25519.pub"
 }
 
 do_uninstall() {

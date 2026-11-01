@@ -3,6 +3,7 @@
 Run with: pytest -m integration   (needs Docker and network access for apt)
 """
 
+import functools
 import shutil
 import subprocess
 import uuid
@@ -46,8 +47,17 @@ def guest(request, tmp_path_factory):
             "docker", "exec", name, "/opt/pvewarden-guest/install.sh", pubkey, gateway, check=False, timeout=600
         )
         assert install.returncode == 0, install.stdout + install.stderr
-        runner = GuestRunner(SSHConfig(key=keydir / "id_ed25519", connect_timeout=5), keydir / "known_hosts")
-        yield {"name": name, "address": address, "runner": runner, "key": keydir / "id_ed25519", "image": image}
+        runner = GuestRunner(SSHConfig(connect_timeout=5), keydir / "known_hosts")
+        key = keydir / "id_ed25519"
+        yield {
+            "name": name,
+            "address": address,
+            "gateway": gateway,
+            "runner": runner,
+            "run": functools.partial(runner.run, key=key, alias="pvewarden-vmid-1"),
+            "key": key,
+            "image": image,
+        }
     finally:
         sh("docker", "rm", "-f", name, check=False)
 
@@ -62,26 +72,26 @@ def raw_ssh(guest, command=None, options=()):
 
 
 async def test_status(guest):
-    rc, out = await guest["runner"].run(guest["address"], "status", timeout=60)
+    rc, out = await guest["run"](guest["address"], "status", timeout=60)
     assert rc == 0, out
     st = parse_status(out)
     assert st["os"].split()[0] == guest["image"].split(":")[0].capitalize() and "kernel" in st
 
 
 async def test_status_reports_auto_updates(guest):
-    rc, out = await guest["runner"].run(guest["address"], "status", timeout=60)
+    rc, out = await guest["run"](guest["address"], "status", timeout=60)
     assert rc == 0, out
     assert parse_status(out)["auto_updates"] in (True, False), out
 
 
 async def test_services_runs_without_root(guest):
-    rc, out = await guest["runner"].run(guest["address"], "services", timeout=60)
+    rc, out = await guest["run"](guest["address"], "services", timeout=60)
     assert rc == 0, out
     assert "system" in parse_services(out)  # no systemd in the container: state is empty, but no error
 
 
 async def test_check_lists_packages_in_the_expected_format(guest):
-    rc, out = await guest["runner"].run(guest["address"], "check", timeout=300)
+    rc, out = await guest["run"](guest["address"], "check", timeout=300)
     assert rc == 0, out
     pkgs = parse_upgradable(out)
     assert bool(pkgs) == bool(out.strip())  # every line parsed
@@ -133,16 +143,16 @@ async def test_upgrade_all_never_installs_third_party_packages(guest):
     setup = sh("docker", "exec", guest["name"], "bash", "-c", THIRD_PARTY_REPO, check=False, timeout=300)
     assert setup.returncode == 0, setup.stderr
 
-    rc, out = await guest["runner"].run(guest["address"], "check", timeout=300)
+    rc, out = await guest["run"](guest["address"], "check", timeout=300)
     dummy = {p["name"]: p for p in parse_upgradable(out)}["pvewarden-dummy"]
     assert (dummy["from"], dummy["to"], dummy["official"]) == ("1.0", "2.0", False)
 
-    rc, out = await guest["runner"].run(guest["address"], "upgrade-all", timeout=900)
+    rc, out = await guest["run"](guest["address"], "upgrade-all", timeout=900)
     assert rc == 0, out[-2000:]
     installed = sh("docker", "exec", guest["name"], "dpkg-query", "-W", "-f=${Version}", "pvewarden-dummy").stdout
     assert installed == "1.0"
 
-    rc, out = await guest["runner"].run(guest["address"], "check", timeout=300)
+    rc, out = await guest["run"](guest["address"], "check", timeout=300)
     official_left = [p["name"] for p in parse_upgradable(out) if p["official"]]
     assert official_left == [], f"official updates not installed: {official_left}"
 
@@ -161,20 +171,67 @@ async def test_update_goes_on_when_the_connection_drops_and_can_be_followed(gues
     assert setup.returncode == 0, setup.stderr
     try:
         with pytest.raises(GuestTimeoutError):
-            await guest["runner"].run(guest["address"], "upgrade-security", timeout=2)  # SSH client killed
+            await guest["run"](guest["address"], "upgrade-security", timeout=2)  # SSH client killed
 
         # still running on the guest: a second update is refused, following it waits for the end
-        rc, out = await guest["runner"].run(guest["address"], "upgrade-security", timeout=60)
+        rc, out = await guest["run"](guest["address"], "upgrade-security", timeout=60)
         assert rc == 75 and "already running" in out
-        rc, out = await guest["runner"].run(guest["address"], "upgrade-follow", timeout=300)
+        rc, out = await guest["run"](guest["address"], "upgrade-follow", timeout=300)
         assert rc == 0, out[-2000:]
         assert out.startswith("started") and "finished-slowly" in out
 
         # afterwards follow reports the finished run again
-        rc, again = await guest["runner"].run(guest["address"], "upgrade-follow", timeout=60)
+        rc, again = await guest["run"](guest["address"], "upgrade-follow", timeout=60)
         assert rc == 0 and "finished-slowly" in again
     finally:
         sh("docker", "exec", guest["name"], "cp", "/root/pvewarden-guest.orig", "/usr/local/sbin/pvewarden-guest")
+
+
+def install(guest, *args):
+    return sh("docker", "exec", guest["name"], "/opt/pvewarden-guest/install.sh", *args, check=False, timeout=600)
+
+
+def test_a_key_made_for_another_guest_is_refused_and_keys_rotate_safely(guest, tmp_path):
+    # guest A reports guest B's address: we connect to B with A's key. B must refuse it.
+    other = tmp_path / "other_guest_key"
+    sh("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other))
+    other_pub = other.with_suffix(".pub").read_text().strip()
+    own_pub = guest["key"].with_suffix(".pub").read_text().strip()
+    with_other = {**guest, "key": other}
+    assert raw_ssh(with_other, "status").returncode == 255
+
+    # enrolling a new key: first added next to the old one, both work
+    r = install(guest, "--keep-keys", other_pub, guest["gateway"])
+    assert r.returncode == 0, r.stderr
+    assert raw_ssh(with_other, "status").returncode == 0 and raw_ssh(guest, "status").returncode == 0
+    # then only the new one is left
+    r = install(guest, "--keys-only", other_pub, guest["gateway"])
+    assert r.returncode == 0, r.stderr
+    assert raw_ssh(with_other, "status").returncode == 0
+    assert raw_ssh(guest, "status").returncode == 255  # the old key is gone
+    keys = sh("docker", "exec", guest["name"], "cat", "/home/pvewarden/.ssh/authorized_keys").stdout
+    assert keys.count("ssh-ed25519") == 1 and keys.startswith("restrict,from=")
+
+    # back to the fixture's key for the other tests
+    assert install(guest, "--keys-only", own_pub, guest["gateway"]).returncode == 0
+    assert raw_ssh(guest, "status").returncode == 0
+
+
+async def test_a_changed_host_key_is_refused(guest, tmp_path):
+    fake = tmp_path / "fake_host_key"
+    sh("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(fake))
+    known = tmp_path / "known_hosts"
+    known.write_text("pvewarden-vmid-1 " + fake.with_suffix(".pub").read_text())
+    runner = GuestRunner(SSHConfig(connect_timeout=5), known)
+    rc, out = await runner.run(guest["address"], "status", timeout=60, key=guest["key"], alias="pvewarden-vmid-1")
+    assert rc == 255 and "verification failed" in out.lower()
+
+
+def test_keys_only_needs_an_installed_client(guest):
+    r = sh("docker", "run", "--rm", "--entrypoint", "/opt/pvewarden-guest/install.sh",
+           f"pvewarden-test-guest:{guest['image'].replace(':', '-')}",
+           "--keys-only", guest["key"].with_suffix(".pub").read_text().strip(), "192.0.2.1", check=False)  # fmt: skip
+    assert r.returncode == 5 and "not installed" in r.stderr
 
 
 # must stay last: it removes the client from the shared container

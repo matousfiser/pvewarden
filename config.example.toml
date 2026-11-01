@@ -1,7 +1,7 @@
 # pvewarden server configuration (/etc/pvewarden/config.toml).
 # Readable only by root and the pvewarden service user: it contains secrets.
 
-# Audit log, per-run update logs and SSH known_hosts
+# Audit log, per-run update logs, SSH known_hosts and the guests' SSH keys (keys/<vmid>)
 state_dir = "/var/lib/pvewarden"
 
 [proxmox]
@@ -17,7 +17,10 @@ verify_tls = "/etc/pvewarden/pve-root-ca.pem"
 
 [ssh]
 user = "pvewarden"
-key = "/etc/pvewarden/id_ed25519"
+# Every guest has its own key in state_dir/keys, made when it is enrolled (pvewarden-enroll, or
+# by hand: pvewarden key new|verify|activate <vmid>). A shared key is possible only for guests
+# whose address is set in [addresses] (or static_guests), never for addresses a guest reports:
+# key = "/etc/pvewarden/id_ed25519"
 # Prefer guest addresses from these networks (guest agent / LXC may report several)
 subnets = ["192.0.2.0/24"]
 parallel = 5

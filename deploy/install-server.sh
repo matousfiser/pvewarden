@@ -2,7 +2,7 @@
 # Install or update the pvewarden server on a Debian/Ubuntu machine (typically a dedicated LXC).
 # Run as root from a checkout of the repository:
 #   deploy/install-server.sh <listen-address>
-# Re-running updates code and dependencies; existing config, SSH key and tokens are kept.
+# Re-running updates code and dependencies; existing config, guest keys and tokens are kept.
 set -euo pipefail
 LISTEN="${1:?usage: install-server.sh <listen-address>}"
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,12 +30,9 @@ echo "    pip: installing pvewarden and its pinned dependencies (the slowest ste
 "$APP/venv/bin/pip" install -q --no-deps --force-reinstall "$SRC"
 ln -sf "$APP/venv/bin/pvewarden" /usr/local/bin/pvewarden
 
-# SSH key for guests: generated here and never leaves this machine
-if [ ! -f "$ETC/id_ed25519" ]; then
-  ssh-keygen -q -t ed25519 -N "" -C "pvewarden@$(hostname)" -f "$ETC/id_ed25519"
-  chown root:"$SVC_USER" "$ETC/id_ed25519" "$ETC/id_ed25519.pub"
-  chmod 0640 "$ETC/id_ed25519"
-fi
+# SSH keys for guests: one per guest, made in $STATE/keys when it is enrolled; they never leave
+# this machine
+install -d -o "$SVC_USER" -g "$SVC_USER" -m 0700 "$STATE/keys"
 
 # config with a fresh HTTP token; the Proxmox part is filled in by hand (or by the installer)
 FRESH=0
@@ -56,6 +53,3 @@ systemctl enable pvewarden >/dev/null
 echo
 echo "Installed $("$APP/venv/bin/pvewarden" --version)."
 [ "$FRESH" = 1 ] && echo "Next: edit $ETC/config.toml ([proxmox]), then check: runuser -u $SVC_USER -- pvewarden doctor"
-echo
-echo "Guest public key (for pvewarden-enroll / guest/install.sh):"
-cat "$ETC/id_ed25519.pub"

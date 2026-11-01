@@ -32,7 +32,6 @@ def test_needs_proxmox_or_static_guests():
     [
         (minimal(bogus=1), "unknown top-level"),
         (minimal(ssh={"key": "/k", "port": 22}), r"\[ssh\]: unknown keys"),
-        ({"static_guests": [{"vmid": 1, "name": "a", "address": "x"}]}, r"\[ssh\]: missing keys"),
         (minimal(ssh={"key": "/k", "subnets": ["not-a-net"]}), "subnets"),
         (minimal(static_guests=[{"vmid": 1, "name": "a", "address": "x", "tag": []}]), "static_guests"),
         (minimal(policy={"confirm_destructive": "yes"}), "confirm_destructive"),
@@ -132,3 +131,10 @@ def test_http_tls_ca_needs_tls():
         parse(minimal(http={"listen": "192.0.2.1", "tls_ca": "/ca.pem"}))
     cfg = parse(minimal(http={"listen": "192.0.2.1", "tls_cert": "/c", "tls_key": "/k", "tls_ca": "/ca.pem"}))
     assert str(cfg.http.tls_ca) == "/ca.pem"
+
+
+def test_shared_ssh_key_is_optional():
+    # guests found through Proxmox use their own keys (state_dir/keys); the shared key is only for
+    # admin-set addresses
+    cfg = parse({"proxmox": {"host": "h", "token_id": "u@pve!t", "token_secret": "s"}})
+    assert cfg.ssh.key is None

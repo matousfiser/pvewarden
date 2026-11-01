@@ -62,15 +62,27 @@ def check_local(app: App) -> list[Result]:
     except OSError as e:
         out.append(fail("State directory", str(e), "it must be writable by the user running pvewarden"))
 
+    keys = app.keys.vmids()
+    out.append(ok("Guest SSH keys", f"{len(keys)} guest(s) with their own key in {app.keys.path}"))
     key = cfg.ssh.key
-    if not key.exists():
-        out.append(fail("SSH key", f"{key} does not exist", "generate it: ssh-keygen -t ed25519 -N '' -f " + str(key)))
+    if key is None:
+        pass
+    elif cfg.proxmox and not cfg.addresses:
+        out.append(
+            warn(
+                "Shared SSH key",
+                f"{key} is configured but no guest may use it (only guests in [addresses] can)",
+                "remove 'key' from [ssh] and delete the key file; guests have their own keys",
+            )
+        )
+    elif not key.exists():
+        out.append(fail("Shared SSH key", f"{key} does not exist", f"ssh-keygen -t ed25519 -N '' -f {key}"))
     elif not os.access(key, os.R_OK):
-        out.append(fail("SSH key", f"{key} is not readable", "run doctor as the pvewarden service user"))
+        out.append(fail("Shared SSH key", f"{key} is not readable", "run doctor as the pvewarden service user"))
     elif key.stat().st_mode & stat.S_IWOTH or key.stat().st_mode & stat.S_IROTH:
-        out.append(fail("SSH key", f"{key} is readable or writable by everyone", f"chmod 0640 {key}"))
+        out.append(fail("Shared SSH key", f"{key} is readable or writable by everyone", f"chmod 0640 {key}"))
     else:
-        out.append(ok("SSH key", str(key)))
+        out.append(ok("Shared SSH key", f"{key} (guests in [addresses] / static_guests)"))
 
     if cfg.http:
         h = cfg.http
@@ -206,7 +218,10 @@ def explain_ssh_error(text: str) -> str:
     if "Permission denied" in text:
         return "key not accepted: enroll the guest (pvewarden-enroll) and check FROM matches this server's address"
     if "Host key verification failed" in text or "REMOTE HOST IDENTIFICATION HAS CHANGED" in text:
-        return "the guest's host key changed: if expected, remove its line from known_hosts in the state directory"
+        return (
+            "the guest's host key changed: if expected (guest reinstalled), forget the old one: "
+            "ssh-keygen -R pvewarden-vmid-<VMID> -f <state_dir>/known_hosts"
+        )
     if "timed out" in text or "No route" in text or "Connection refused" in text:
         return "cannot reach the guest over SSH: check its address, firewall and that sshd runs"
     if "Could not resolve" in text:

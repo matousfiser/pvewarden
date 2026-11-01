@@ -8,19 +8,34 @@ agent can and cannot do, what protects each part, and what remains your responsi
 ```
  agent (MCP client) ──HTTPS + token──▶ pvewarden server (LXC) ──API token──▶ Proxmox API
                                               │
-                                              └──SSH key, forced command──▶ guests
+                                              └──one SSH key per guest, forced command──▶ guests
 ```
 
 | Part | Holds | Can |
 |---|---|---|
 | Agent | an MCP token | call pvewarden's tools, nothing else |
-| pvewarden server | MCP tokens, Proxmox API token, SSH private key | everything below, on behalf of agents |
+| pvewarden server | MCP tokens, Proxmox API token, one SSH private key per guest | everything below, on behalf of agents |
 | Proxmox API token | role `Warden` on pool `pvewarden` | see pool guests, snapshot, roll back, start/stop/reboot, read VM addresses |
-| SSH key on guests | user `pvewarden` | run a handful of fixed commands, some via sudo |
+| a guest's SSH key | user `pvewarden` on that guest only | run a handful of fixed commands, some via sudo |
 | `pvewarden-setup` | root on the host, only while it runs | create the above; nothing stays running on the host |
 
 The server is the valuable target. Keep its container on a management network and don't run other
 services in it.
+
+## Threat model
+
+pvewarden is built to hold when one of these happens:
+
+- **The agent is confused, wrong or prompt-injected.** It can only call the tools, the tags limit
+  what they do, and the irreversible steps need your click.
+- **An MCP token leaks.** The holder can do what the tags allow, nothing more, and is logged.
+- **An enrolled guest is compromised** (root on it). It cannot use pvewarden to reach other guests:
+  each guest accepts only its own key, so whatever address it reports, the server's connection on
+  its behalf cannot log in anywhere else. It can lie about its own updates and services.
+
+Not in scope: someone with root on the Proxmox host or in the server container (they hold the
+keys), and anyone who can reach port 8765 and holds a token. Keep port 8765 on a network you trust
+(management network, VPN).
 
 ## What an agent can do
 
@@ -49,9 +64,10 @@ Everything goes through the tools listed in the [README](../README.md#tools). On
 - install from third-party repositories or upgrade to a new distribution release,
 - roll back to or delete snapshots that pvewarden did not take.
 
-## Guests: the forced command
+## Guests: own key, forced command
 
-Each guest's `~pvewarden/.ssh/authorized_keys` has exactly one line:
+Each guest has its own SSH key pair, made in the server container when the guest is enrolled. The
+guest's `~pvewarden/.ssh/authorized_keys` has exactly one line, with that guest's public key:
 
 ```
 restrict,from="<server address>",command="/usr/local/sbin/pvewarden-gate" ssh-ed25519 ...
@@ -65,6 +81,16 @@ restrict,from="<server address>",command="/usr/local/sbin/pvewarden-gate" ssh-ed
   `/usr/local/sbin/pvewarden-guest <command>`, and `/etc/sudoers.d/pvewarden` allows exactly those
   five commands.
 - The scripts are owned by root and not writable by `pvewarden`.
+
+The server picks the key by VMID, not by address. A VM's address comes from the guest agent and a
+container's from its own network settings, so a guest could report another guest's address; with
+its own key, the login there fails. Guest host keys are also remembered per VMID
+(`HostKeyAlias=pvewarden-vmid-<vmid>`), as a second check.
+
+Enrolling switches a guest to a new key in checked steps: the new key is added next to the old one,
+the server logs in with it, then only the new key is left in the guest, and only then does the server
+use it. If enrolling stops in between, the server refuses the guest until it is enrolled again; it
+never falls back to another key. Enrolling again is also how to rotate a guest's key.
 
 Updates run detached from the SSH session (a transient systemd unit), so a dropped connection or a
 timeout cannot interrupt dpkg halfway.
@@ -80,7 +106,8 @@ timeout cannot interrupt dpkg halfway.
   rebinding.
 - **Proxmox API token:** stored only in the server's config. It never passes through the agent or
   through `pvewarden-setup`'s output. Its certificate is pinned to the Proxmox CA.
-- **SSH key:** generated in the server container. Only the public half is copied to guests.
+- **SSH keys:** one per guest, generated in the server container (`state_dir/keys`). Only the public
+  half is copied to that guest.
 - **Setup** never prints the Proxmox token. It shows the agent token once, at the end. The HTTPS
   private key is created in the container and never leaves it; only a signing request goes to the
   host.

@@ -30,7 +30,8 @@ Agent:  ct101: snapshot pvewarden_20261031_145241, 4 balíky nainstalovány, slu
 | Riziko | Co pvewarden dělá |
 |---|---|
 | Agent sáhne na hosta, na kterého nemá | Vidí jen hosty v poolu `pvewarden`. Aktualizace potřebují tag `pvewarden-update`, restarty tag `pvewarden-reboot`. Tagy nastavuješ jen ty. |
-| Agent získá shell | SSH klíč v hostech je svázaný s vynuceným příkazem, který přijme jen pár pevných slov (`check`, `status`, `upgrade-security`, …). Žádný shell, žádné přesměrování portů. |
+| Agent získá shell | SSH klíč serveru je v hostech svázaný s vynuceným příkazem, který přijme jen pár pevných slov (`check`, `status`, `upgrade-security`, …). Žádný shell, žádné přesměrování portů. |
+| Napadený host se dostane k ostatním | Každý host má vlastní SSH klíč a přijme jen ten. Ať host nahlásí jakoukoli adresu, server nejde přesměrovat na jiného hosta. |
 | Ukradený token otevře Proxmox | API token má roli omezenou na pool: vidí hosty, dělá snapshoty, rollback a zapíná a vypíná je. Nemůže vytvářet, mazat, překonfigurovat ani se dostat na hosta. |
 | Aktualizace rozbije hosta | Napřed se automaticky udělá snapshot. Když selže, nic se neinstaluje. |
 | Agent „vyřeší“ problém po svém | Rollback, mazání snapshotů a aktualizace bez snapshotu musíš potvrdit *ty* v dialogu, na který agent odpovědět nemůže (MCP elicitation). |
@@ -84,8 +85,8 @@ Claude Code:
 
 ## Co se mění v hostovi
 
-- systémový uživatel `pvewarden` s jedním SSH klíčem, platným jen z adresy serveru a jen pro vynucený
-  příkaz `/usr/local/sbin/pvewarden-gate`,
+- systémový uživatel `pvewarden` s jedním SSH klíčem vytvořeným jen pro tohoto hosta, platným jen
+  z adresy serveru a jen pro vynucený příkaz `/usr/local/sbin/pvewarden-gate`,
 - `/usr/local/sbin/pvewarden-guest` a `/etc/sudoers.d/pvewarden`, které povolí přesně pět příkazů
   jako root,
 - `unattended-upgrades` a `sudo`, pokud chybí. pvewarden přes `unattended-upgrade` instaluje jen

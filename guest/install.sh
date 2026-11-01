@@ -4,6 +4,9 @@
 #                                         install or refresh (idempotent)
 #   install.sh [--dry-run] --uninstall    remove user, scripts, sudoers rule and the auto-updates override
 # --dry-run prints what would change and changes nothing.
+# --keep-keys: add the key next to the keys already there (enrolling a new key: it is tested before
+#   the old ones go). --keys-only: only replace authorized_keys with this one key (the last enroll
+#   step); nothing else is installed.
 # --auto-updates: the guest's own daily unattended-upgrades run (it installs updates without a
 #   pvewarden snapshot). keep (default) leaves the guest's setting alone; off/on write an override
 #   to $AUTO_CONF, which --uninstall removes again.
@@ -15,14 +18,16 @@ USER_NAME=pvewarden
 SBIN=/usr/local/sbin
 SUDOERS=/etc/sudoers.d/pvewarden
 AUTO_CONF=/etc/apt/apt.conf.d/52pvewarden-auto-upgrades
-USAGE='usage: install.sh [--dry-run] [--auto-updates=keep|off|on] "<server public key>" <server address>
+USAGE='usage: install.sh [--dry-run] [--auto-updates=keep|off|on] [--keep-keys|--keys-only] "<server public key>" <server address>
        install.sh [--dry-run] --uninstall'
 
-DRY_RUN=0 UNINSTALL=0 AUTO=keep ARGS=()
+DRY_RUN=0 UNINSTALL=0 AUTO=keep KEYS=replace ARGS=()
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY_RUN=1 ;;
     --uninstall) UNINSTALL=1 ;;
+    --keep-keys) KEYS=keep ;;
+    --keys-only) KEYS=only ;;
     --auto-updates=keep | --auto-updates=off | --auto-updates=on) AUTO=${a#*=} ;;
     --auto-updates*) echo "$USAGE" >&2; exit 2 ;;
     *) ARGS+=("$a") ;;
@@ -76,9 +81,32 @@ case "$ID" in
   *) echo "unsupported distribution: $ID (supported: ubuntu, debian)" >&2; exit 3 ;;
 esac
 
-SUDO_RULE="$USER_NAME ALL=(root) NOPASSWD: $SBIN/pvewarden-guest check, $SBIN/pvewarden-guest status, $SBIN/pvewarden-guest upgrade-security, $SBIN/pvewarden-guest upgrade-all, $SBIN/pvewarden-guest upgrade-follow"
 KEY_LINE="restrict,from=\"$FROM\",command=\"$SBIN/pvewarden-gate\" $PUBKEY"
 
+# write_keys: authorized_keys = this key alone, or (--keep-keys) added to the keys already there
+write_keys() {
+  local home tmp blob
+  home=$(getent passwd "$USER_NAME" | cut -d: -f6)
+  install -d -o "$USER_NAME" -g "$USER_NAME" -m 0700 "$home/.ssh"
+  tmp=$(mktemp "$home/.ssh/.authorized_keys.XXXXXX")
+  if [ "$KEYS" = keep ] && [ -f "$home/.ssh/authorized_keys" ]; then
+    blob=$(echo "$PUBKEY" | awk '{print $2}')
+    grep -vF -- "$blob" "$home/.ssh/authorized_keys" >> "$tmp" || true
+  fi
+  echo "$KEY_LINE" >> "$tmp"
+  chown "$USER_NAME:$USER_NAME" "$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$home/.ssh/authorized_keys" # atomic: sshd never sees a half-written file
+}
+
+if [ "$KEYS" = only ]; then
+  id "$USER_NAME" >/dev/null 2>&1 || { echo "the pvewarden client is not installed here" >&2; exit 5; }
+  say "replace ~$USER_NAME/.ssh/authorized_keys with only: $KEY_LINE"
+  real && write_keys && echo "pvewarden key replaced (only the new key is accepted now)"
+  exit 0
+fi
+
+SUDO_RULE="$USER_NAME ALL=(root) NOPASSWD: $SBIN/pvewarden-guest check, $SBIN/pvewarden-guest status, $SBIN/pvewarden-guest upgrade-security, $SBIN/pvewarden-guest upgrade-all, $SBIN/pvewarden-guest upgrade-follow"
 # check/upgrade need unattended-upgrades (it pulls in python3-apt); minimal images often lack sudo.
 # No recommends: they would pull in e.g. systemd-resolved, which takes over /etc/resolv.conf.
 missing=() INSTALLED_UU=0
@@ -116,13 +144,13 @@ if real; then
   rm -f "$tmp"
 fi
 
-say "write ~$USER_NAME/.ssh/authorized_keys (replacing it): $KEY_LINE"
+if [ "$KEYS" = keep ]; then
+  say "add to ~$USER_NAME/.ssh/authorized_keys (keeping the keys already there): $KEY_LINE"
+else
+  say "write ~$USER_NAME/.ssh/authorized_keys (replacing it): $KEY_LINE"
+fi
 if real; then
-  home=$(getent passwd "$USER_NAME" | cut -d: -f6)
-  install -d -o "$USER_NAME" -g "$USER_NAME" -m 0700 "$home/.ssh"
-  echo "$KEY_LINE" > "$home/.ssh/authorized_keys"
-  chown "$USER_NAME:$USER_NAME" "$home/.ssh/authorized_keys"
-  chmod 0600 "$home/.ssh/authorized_keys"
+  write_keys
   echo "pvewarden client installed (key accepted from $FROM)"
 fi
 

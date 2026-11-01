@@ -28,7 +28,9 @@ class ProxmoxConfig:
 
 @dataclass(frozen=True)
 class SSHConfig:
-    key: Path
+    # Shared key, only for guests whose address the admin set ([addresses], static_guests). Guests
+    # found through Proxmox each have their own key in state_dir/keys (see pvewarden.keys).
+    key: Path | None = None
     user: str = "pvewarden"
     subnets: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = ()
     parallel: int = 5
@@ -119,13 +121,13 @@ def parse(data: dict) -> Config:
             verify_tls=p.get("verify_tls", True),
         )
 
-    s = _section(data, "ssh", {"key", "user", "subnets", "parallel", "connect_timeout"}, {"key"})
+    s = _section(data, "ssh", {"key", "user", "subnets", "parallel", "connect_timeout"})
     try:
         subnets = tuple(ipaddress.ip_network(n) for n in s.get("subnets", []))
     except ValueError as e:
         raise ConfigError(f"[ssh] subnets: {e}") from e
     ssh = SSHConfig(
-        key=Path(s["key"]).expanduser(),
+        key=Path(s["key"]).expanduser() if s.get("key") else None,
         user=s.get("user", "pvewarden"),
         subnets=subnets,
         parallel=int(s.get("parallel", 5)),

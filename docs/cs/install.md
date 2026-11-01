@@ -100,9 +100,14 @@ Stáhni nový `pvewarden-setup` a spusť:
 bash pvewarden-setup upgrade
 ```
 
-Aktualizuje server v kontejneru a nástroje na hostu. Konfigurace, tokeny, SSH klíč, audit log
-i certifikát zůstanou. Pak nabídne obnovit klienta na všech zapsaných hostech. Potvrď to, pokud
-nevíš jistě, že se klient nezměnil. Nastavení automatických aktualizací hostů zůstane.
+Aktualizuje server v kontejneru a nástroje na hostu. Konfigurace, tokeny, klíče hostů, audit log
+i certifikát zůstanou. Pak nabídne znovu zapsat všechny hosty, čímž se obnoví jejich klient.
+Potvrď to, pokud nevíš jistě, že se klient nezměnil. Nastavení automatických aktualizací hostů
+zůstane.
+
+**Z verze 0.1.1 a starší:** hosté dřív sdíleli jeden SSH klíč, od 0.1.2 má každý vlastní. Nové
+zapsání je převede a server do té doby hosta odmítá. Až mají vlastní klíč všichni, upgrade starý
+sdílený klíč ze serveru smaže.
 
 ## Odstranění
 

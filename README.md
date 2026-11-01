@@ -28,7 +28,8 @@ Agent:  ct101: snapshot pvewarden_20261031_145241, 4 packages installed, service
 | Risk | What pvewarden does |
 |---|---|
 | The agent touches guests it should not | It only sees guests in the `pvewarden` pool. Updates need the Proxmox tag `pvewarden-update` and reboots need `pvewarden-reboot`. Only you set the tags. |
-| The agent gets a shell | On guests, its SSH key is bound to a forced command that accepts a handful of fixed command words (`check`, `status`, `upgrade-security`, …). No shell, no port forwarding. |
+| The agent gets a shell | On guests, the server's SSH key is bound to a forced command that accepts a handful of fixed command words (`check`, `status`, `upgrade-security`, …). No shell, no port forwarding. |
+| A compromised guest reaches others | Every guest has its own SSH key and accepts only that one. Whatever address a guest reports, the server cannot be sent to another guest. |
 | A stolen token unlocks Proxmox | The Proxmox API token has a role limited to the pool. It can see guests, take snapshots, roll back and power-manage them. It cannot create, delete, reconfigure or reach the host. |
 | A bad update breaks a guest | A snapshot comes first, automatically. If the snapshot fails, nothing is installed. |
 | The agent "solves" a problem its own way | Rollback, snapshot deletion and updates without a snapshot need *your* click in a dialog that the agent cannot answer (MCP elicitation). |
@@ -111,8 +112,8 @@ pvewarden only rolls back or deletes snapshots it took itself (`pvewarden_*`).
 
 Enrolling a guest:
 
-- adds a system user `pvewarden` with one SSH key. The key accepts only connections from the server's
-  address and only the forced command `/usr/local/sbin/pvewarden-gate`.
+- adds a system user `pvewarden` with one SSH key, made for this guest only. The key accepts only
+  connections from the server's address and only the forced command `/usr/local/sbin/pvewarden-gate`.
 - adds `/usr/local/sbin/pvewarden-guest` and `/etc/sudoers.d/pvewarden`, which allow exactly five
   commands as root.
 - installs `unattended-upgrades` and `sudo` if they are missing. pvewarden uses `unattended-upgrade`

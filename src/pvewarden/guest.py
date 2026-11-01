@@ -21,21 +21,33 @@ class GuestRunner:
         self.known_hosts = known_hosts
         self._slots = asyncio.Semaphore(cfg.parallel)
 
-    def ssh_args(self, address: str, command: str) -> list[str]:
+    def ssh_args(self, address: str, command: str, key: Path, alias: str | None = None) -> list[str]:
+        """alias: the name the guest's host key is remembered under (one per VMID, not per address)."""
         return [
             "ssh",
-            "-i", str(self.cfg.key),
+            "-i", str(key),
+            "-o", "IdentitiesOnly=yes",
+            "-o", "IdentityAgent=none",
             "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={self.cfg.connect_timeout}",
             "-o", "LogLevel=ERROR",
             "-o", f"UserKnownHostsFile={self.known_hosts}",
             "-o", "StrictHostKeyChecking=accept-new",
+            *(["-o", f"HostKeyAlias={alias}"] if alias else []),
             f"{self.cfg.user}@{address}",
             command,
         ]  # fmt: skip
 
     async def run(
-        self, address: str, command: str, timeout: int = 1800, log: Path | None = None, log_mode: str = "a"
+        self,
+        address: str,
+        command: str,
+        timeout: int = 1800,
+        log: Path | None = None,
+        log_mode: str = "a",
+        *,
+        key: Path,
+        alias: str | None = None,
     ) -> tuple[int, str]:
         """Run an allowed command; stream output into `log` as it arrives if given.
 
@@ -44,7 +56,7 @@ class GuestRunner:
             raise ValueError(f"unknown guest command {command!r}")
         async with self._slots:
             proc = await asyncio.create_subprocess_exec(
-                *self.ssh_args(address, command),
+                *self.ssh_args(address, command, key, alias),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,

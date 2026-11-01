@@ -58,7 +58,7 @@ esac
       *chpasswd*) cat > "$FAKE/chpasswd.stdin" ;;
       "ip -4 -o addr show dev eth0") echo "2: eth0    inet 192.0.2.50/24 brd 192.0.2.255 scope global eth0" ;;
       *python3*) echo "192.0.2.0/24" ;;
-      "cat /etc/pvewarden/id_ed25519.pub") echo "$FAKE_PUBKEY" ;;
+      "test -f /etc/pvewarden/id_ed25519") [ -f "$FAKE/shared_key" ] ;;
       "/usr/local/bin/pvewarden token "*) sleep "${FAKE_DELAY:-0}"; echo "NEW-TOKEN-FOR-${@: -1}"; echo "noise on stderr" >&2 ;;
       "test -f /etc/pvewarden/tls.crt") [ -z "$FAKE_NO_TLS" ] ;;
       "cat /etc/pvewarden/tls.crt") cat "$FAKE/pushed/_etc_pvewarden_tls.crt" 2>/dev/null ;;
@@ -130,7 +130,7 @@ def host(tmp_path, keys, pve_ca):
     sbin = tmp_path / "sbin"
     sbin.mkdir()
     enroll = sbin / "pvewarden-enroll"
-    enroll.write_text('#!/bin/bash\necho "ENROLL $*" >> "$FAKE/calls.log"\n')
+    enroll.write_text('#!/bin/bash\necho "ENROLL $*" >> "$FAKE/calls.log"\n[ -z "$FAKE_ENROLL_FAILS" ]\n')
     enroll.chmod(0o755)
     (fake / "resources.json").write_text(
         '[{"vmid":101,"name":"web","type":"lxc","status":"running"},'
@@ -252,7 +252,8 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
     assert not list(host.pushed.glob("*tls.key*"))  # the private key never leaves the container
 
     enroll_conf = (host.state / "enroll.conf").read_text()
-    assert "AAAASERVERKEY" in enroll_conf and "FROM=192.0.2.50" in enroll_conf
+    assert "SERVER_CT=120" in enroll_conf and "FROM=192.0.2.50" in enroll_conf
+    assert "PUBKEY" not in enroll_conf and "\nkey = " not in config  # no shared key: one key per guest
     assert (host.path / "opt/proxmox/pvewarden-enroll").exists()
 
 
@@ -513,6 +514,34 @@ def test_upgrade(host):
     assert "ENROLL --all" in calls
     assert not any(c.startswith(("pct create", "pveum user token")) for c in calls)  # keeps the existing token
     assert (host.path / "opt/proxmox/pvewarden-setup").exists()
+
+
+def upgrade_from_0_1_1(host, **env):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    (host.state / "enroll.conf").write_text('PUBKEY="ssh-ed25519 AAAAOLD srv"\nFROM=10.9.9.9\nPOOL=pvewarden\n')
+    host.mark("ct", "shared_key")
+    return host.run("upgrade", "--yes", **env)
+
+
+def test_upgrade_switches_guests_to_their_own_keys_then_removes_the_shared_key(host):
+    r = upgrade_from_0_1_1(host)
+    assert r.returncode == 0, r.stderr
+    conf = (host.state / "enroll.conf").read_text()
+    assert "SERVER_CT=120" in conf and "PUBKEY" not in conf and "FROM=10.9.9.9" in conf  # FROM as the admin set it
+    calls = host.calls()
+    enroll_at = calls.index("ENROLL --all")
+    removal = [i for i, c in enumerate(calls) if c.startswith(("pct exec 120 -- rm -f /etc/pvewarden/id_ed25519",
+                                                                 "pct exec 120 -- sed -i /^key = /d"))]  # fmt: skip
+    assert len(removal) == 2 and min(removal) > enroll_at  # only after every guest switched
+    assert "pct exec 120 -- sed -i /^key = /d /etc/pvewarden/config.toml" in calls
+
+
+def test_upgrade_keeps_the_shared_key_while_a_guest_is_not_switched(host):
+    r = upgrade_from_0_1_1(host, FAKE_ENROLL_FAILS="1")
+    assert r.returncode == 0, r.stderr
+    assert "some guests were not switched" in r.stdout
+    assert not [c for c in host.calls() if "id_ed25519" in c and " rm " in c]
 
 
 def test_interactive_ssh_keys_one_source_at_a_time_with_errors_shown(host, keys):

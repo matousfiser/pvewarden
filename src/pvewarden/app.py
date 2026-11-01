@@ -18,6 +18,7 @@ from pvewarden.errors import (
     ProxmoxError,
 )
 from pvewarden.guest import GuestRunner, clean_tail, parse_services, parse_status, parse_upgradable
+from pvewarden.keys import KeyStore
 from pvewarden.proxmox import Guest, ProxmoxClient
 
 SNAPSHOT_PREFIX = "pvewarden_"
@@ -30,6 +31,7 @@ class App:
         self.audit = AuditLog(cfg.state_dir / "audit.jsonl")
         self.pve = ProxmoxClient(cfg.proxmox) if cfg.proxmox else None
         self.runner = GuestRunner(cfg.ssh, cfg.state_dir / "known_hosts")
+        self.keys = KeyStore(cfg.state_dir / "keys")
         self.runs_dir = cfg.state_dir / "runs"
         self.pending_dir = cfg.state_dir / "pending"  # updates still running on a guest
 
@@ -116,8 +118,39 @@ class App:
                 return ip
         return g.name  # fall back to DNS
 
-    async def run(self, g: Guest, command: str, **kwargs) -> tuple[int, str]:
-        return await self.runner.run(await self.address(g), command, **kwargs)
+    def address_is_pinned(self, vmid: int) -> bool:
+        """The admin set this guest's address in the config; the guest cannot redirect us."""
+        return vmid in self.cfg.addresses or self.pve is None
+
+    def key_for(self, g: Guest, new: bool = False) -> Path:
+        """The SSH key for this guest. new=True: the key being enrolled (pvewarden key verify)."""
+        if new:
+            key = self.keys.pending(g.vmid)
+            if key is None:
+                raise GuestError(f"guest {g.vmid} ({g.name}) has no key being enrolled (pvewarden key new {g.vmid})")
+            return key
+        key = self.keys.active(g.vmid)
+        if key is not None:
+            return key
+        # An address reported by the guest (guest agent, container interfaces) is under the guest's
+        # control. A shared key would let one guest send us to another, so only admin-set addresses
+        # may use it.
+        if self.address_is_pinned(g.vmid):
+            if self.cfg.ssh.key is not None:
+                return self.cfg.ssh.key
+            raise GuestError(
+                f"guest {g.vmid} ({g.name}) has no SSH key: set [ssh] key or run: pvewarden key new {g.vmid}"
+            )
+        raise GuestError(
+            f"guest {g.vmid} ({g.name}) has no pvewarden key of its own yet; nothing was done. "
+            f"Enroll it again on the Proxmox host: pvewarden-enroll {g.vmid}"
+        )
+
+    async def run(self, g: Guest, command: str, new_key: bool = False, **kwargs) -> tuple[int, str]:
+        key = self.key_for(g, new=new_key)
+        return await self.runner.run(
+            await self.address(g), command, key=key, alias=f"pvewarden-vmid-{g.vmid}", **kwargs
+        )
 
     async def status(self, g: Guest) -> dict:
         rc, out = await self.run(g, "status", timeout=60)

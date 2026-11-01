@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from conftest import UPD
@@ -209,7 +210,8 @@ async def test_update_without_snapshot_checks_policy_before_asking(app):
 
 async def test_static_inventory_updates_without_asking(app):
     app.pve = None
-    app.cfg = replace(app.cfg, static_guests=(StaticGuest(1, "t", "192.0.2.50", tags=(UPD,)),))
+    ssh = replace(app.cfg.ssh, key=Path("/etc/pvewarden/id_ed25519"))  # admin-set address: shared key allowed
+    app.cfg = replace(app.cfg, ssh=ssh, static_guests=(StaticGuest(1, "t", "192.0.2.50", tags=(UPD,)),))
     async with Client(create_server(app)) as client:  # no elicitation, and nothing to ask about
         res = await client.call_tool("apply_updates", {"vmid": 1, "snapshot": False})
     assert not res.is_error, text(res)

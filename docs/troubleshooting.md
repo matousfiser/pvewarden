@@ -55,12 +55,15 @@ not know. Use the address from the summary, or add the name to `[http] hostnames
 **"missing the Proxmox tag 'pvewarden-update'":** working as intended. Add the tag in the Proxmox
 UI if agents should update that guest.
 
-**SSH "Permission denied":** the guest's client is missing, or it accepts the key only from another
-address (`from=` in `~pvewarden/.ssh/authorized_keys`). This happens after the server's address
-changed. Re-enroll the guest.
+**"has no pvewarden key of its own yet":** the guest was enrolled before 0.1.2, or enrolling it
+stopped halfway. Enroll it again: `pvewarden-enroll <vmid>`.
 
-**"the guest's host key changed":** expected after reinstalling the guest. Remove its line from
-`/var/lib/pvewarden/known_hosts` in the server container.
+**SSH "Permission denied":** the guest's client is missing, it accepts the key only from another
+address (`from=` in `~pvewarden/.ssh/authorized_keys`, e.g. after the server's address changed), or
+it has a different key than the server. Re-enroll the guest.
+
+**"the guest's host key changed":** expected after reinstalling the guest. In the server container:
+`ssh-keygen -R pvewarden-vmid-<vmid> -f /var/lib/pvewarden/known_hosts`
 
 **A VM has no address / "does not resolve":** `qemu-guest-agent` is not running in the VM, or the
 *QEMU Guest Agent* option is off in Proxmox. Alternatively, set the address in `[addresses]`.

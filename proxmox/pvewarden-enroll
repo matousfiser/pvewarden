@@ -5,6 +5,12 @@
 #   pvewarden-enroll --uninstall VMID...                   remove the client from guests
 #   --auto-updates keep|off|on                             guests' own daily updates (default keep)
 #   --dry-run (with any of the above)                      show what would change, change nothing
+#
+# Every guest gets its own SSH key, made on the server; the guest accepts only that key. Enrolling
+# switches a guest in steps, each checked before the next: new key on the server -> added next to
+# the old one in the guest -> the server logs in with it -> only the new key left in the guest ->
+# the server makes it active. If a step fails, the switch does not happen; a guest left between
+# steps is refused by the server until it is enrolled again.
 set -euo pipefail
 
 CONF=${PVEWARDEN_ENROLL_CONF:-/etc/pvewarden/enroll.conf}
@@ -12,8 +18,22 @@ GUEST_DIR="$(cd "$(dirname "$(readlink -f "$0")")/../guest" && pwd)"
 PVE_ETC=${PVE_ETC:-/etc/pve}
 POOL=pvewarden
 # shellcheck source=/dev/null
-. "$CONF" # PUBKEY=, FROM=, optional POOL=
-: "${PUBKEY:?PUBKEY missing in $CONF}" "${FROM:?FROM missing in $CONF}"
+. "$CONF" # SERVER_CT= (or SERVER_CMD=), FROM=, optional POOL=
+: "${FROM:?FROM missing in $CONF}"
+[ -n "${SERVER_CT:-}${SERVER_CMD:-}" ] || {
+  echo "SERVER_CT missing in $CONF (pvewarden 0.1.2 needs it: run pvewarden-setup upgrade)" >&2
+  exit 1
+}
+
+# server ARGS...: run 'pvewarden ARGS' on the pvewarden server, as its service user
+server() {
+  if [ -n "${SERVER_CMD:-}" ]; then
+    # shellcheck disable=SC2086  # SERVER_CMD is a command line, e.g. "ssh root@srv runuser -u pvewarden -- pvewarden"
+    $SERVER_CMD "$@"
+  else
+    pct exec "$SERVER_CT" -- runuser -u pvewarden -- /usr/local/bin/pvewarden "$@"
+  fi
+}
 
 usage() {
   sed -n '3,7s/^#  //p' "$0"
@@ -125,14 +145,9 @@ while [ $# -gt 0 ]; do
 done
 [ ${#IDS[@]} -gt 0 ] || usage
 
-if [ "$UNINSTALL" = 1 ]; then
-  ARGS=(--uninstall)
-elif [ "$AUTO" = keep ]; then
-  ARGS=("$PUBKEY" "$FROM") # also what older guest clients understand
-else
-  ARGS=("--auto-updates=$AUTO" "$PUBKEY" "$FROM")
-fi
-[ "$DRY_RUN" = 1 ] && ARGS=(--dry-run "${ARGS[@]}")
+OPTS=()
+[ "$DRY_RUN" = 1 ] && OPTS+=(--dry-run)
+[ "$AUTO" = keep ] || OPTS+=("--auto-updates=$AUTO")
 
 # slow CMD...: prints a sign of life every 5 s while CMD runs (apt in a guest can take minutes)
 slow() {
@@ -153,16 +168,58 @@ slow() {
   return "$rc"
 }
 
+# enroll_one VMID TYPE: install the client and switch the guest to its own key (see the top)
+enroll_one() {
+  local id=$1 type=$2 pub
+  if [ "$DRY_RUN" = 1 ]; then
+    slow "run_$type" "$id" "${OPTS[@]}" --keep-keys "ssh-ed25519 DRYRUN" "$FROM" || return 1
+    [ "$DO_POOL" = 1 ] && add_to_pool "$id"
+    echo "would: make a key for $id on the server, log in with it, leave only that key in the guest, activate it"
+    [ -n "$TAGS" ] && merge_tags "$id" "$type"
+    return 0
+  fi
+  pub=$(server key new "$id") || {
+    echo "cannot make a key on the pvewarden server (is it running and up to date?)" >&2
+    return 1
+  }
+  slow "run_$type" "$id" "${OPTS[@]}" --keep-keys "$pub" "$FROM" || return 1
+  if [ "$DO_POOL" = 1 ]; then add_to_pool "$id" || return 1; fi
+  server key verify "$id" || {
+    echo "the server cannot log in to $id with its new key: nothing was switched (is $id in pool $POOL?)" >&2
+    return 1
+  }
+  "run_$type" "$id" --keys-only "$pub" "$FROM" || {
+    echo "could not remove the old key from $id: nothing was switched; run pvewarden-enroll $id again" >&2
+    return 1
+  }
+  server key activate "$id" || {
+    echo "$id accepts only its new key, but the server did not switch to it: run pvewarden-enroll $id again" >&2
+    return 1
+  }
+  echo "own SSH key active"
+  [ -n "$TAGS" ] && merge_tags "$id" "$type"
+  return 0
+}
+
+uninstall_one() {
+  local id=$1 type=$2
+  slow "run_$type" "$id" "${OPTS[@]}" --uninstall || return 1
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "would: delete the key for $id on the server"
+  else
+    server key remove "$id" || echo "note: could not delete the key for $id on the server" >&2
+  fi
+}
+
 failed=()
 for id in "${IDS[@]}"; do
   echo "=== $id"
-  if type=$(guest_type "$id") && slow "run_$type" "$id" "${ARGS[@]}"; then
-    if [ "$UNINSTALL" = 0 ]; then
-      [ "$DO_POOL" = 1 ] && add_to_pool "$id"
-      [ -n "$TAGS" ] && merge_tags "$id" "$type"
-    fi
-  else
+  if ! type=$(guest_type "$id"); then
     failed+=("$id")
+  elif [ "$UNINSTALL" = 1 ]; then
+    uninstall_one "$id" "$type" || failed+=("$id")
+  else
+    enroll_one "$id" "$type" || failed+=("$id")
   fi
 done
 
