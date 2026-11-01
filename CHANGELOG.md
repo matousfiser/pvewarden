@@ -51,6 +51,13 @@
 - Release files get a signed build provenance attestation
   (`gh attestation verify <file> -R matousfiser/pvewarden`).
 
+**Installer**
+- A pool, role or user with pvewarden's names that the installer did not create is no longer taken
+  over silently: the install stops before any change, or takes them over only when you say so
+  (dialog, or `PVEWARDEN_ADOPT_EXISTING=yes`). Before, it rewrote an existing `Warden` role's
+  privileges and `uninstall` deleted such objects. `uninstall` now deletes only what the installer
+  created or took over (`/etc/pvewarden/owned.conf`); upgrades record the objects of older installs.
+
 ## 0.1.1 (2026-11-01)
 
 - `pvewarden-setup`: the install summary, `connect` and `token` output are laid out in clear

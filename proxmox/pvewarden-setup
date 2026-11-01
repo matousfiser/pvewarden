@@ -27,6 +27,7 @@ SBIN=${PVEWARDEN_SBIN:-/usr/local/sbin}
 CT_ETC=/etc/pvewarden                                # server config inside the container
 PVE_ETC=${PVE_ETC:-/etc/pve}
 SETUP_STATE=$ETC/setup.conf
+OWNED=$ETC/owned.conf # Proxmox objects pvewarden-setup created (or was told to take over): uninstall deletes only these
 TITLE="pvewarden $VERSION setup"
 CT_TAG=pvewarden-server
 TAG_UPDATE=pvewarden-update
@@ -506,16 +507,60 @@ wait_for_network() {
   die "container $CTID has no working network (address: ${CT_IP:-none}); check the IP, gateway and DNS"
 }
 
+# --- ownership of the Proxmox objects -----------------------------------------------------
+
+owns() { [ -f "$OWNED" ] && grep -qx "$1=1" "$OWNED"; }
+mark_owned() {
+  owns "$1" && return 0
+  if [ "$DRY_RUN" = 1 ]; then echo "would record in $OWNED: $1"; return 0; fi
+  mkdir -p "$ETC"
+  echo "$1=1" >> "$OWNED"
+}
+pool_exists() { pvesh get "/pools/$POOL" >/dev/null 2>&1; }
+role_exists() { pveum role list --output-format json | json 'exit !grep { $_->{roleid} eq "'"$ROLE"'" } @$d'; }
+user_exists() { pvesh get "/access/users/$PVE_USER" >/dev/null 2>&1; }
+
+# check_name_collisions: before anything changes. A pool, role or user of the same name that
+# pvewarden-setup did not create belongs to someone else: changing it (a role's privileges!) or
+# deleting it at uninstall could break other things. Take it over only when told to.
+check_name_collisions() {
+  local found=() what
+  pool_exists && ! owns POOL && found+=("pool $POOL (guests in it become visible to pvewarden)")
+  role_exists && ! owns ROLE && found+=("role $ROLE (its privileges would be set to: $PRIVS; every user with this role gets exactly these)")
+  user_exists && ! owns USER && found+=("user $PVE_USER (it gets a new API token)")
+  [ ${#found[@]} -gt 0 ] || return 0
+  what=$(printf -- '- %s\n' "${found[@]}")
+  if [ "$YES" = 1 ]; then
+    [ "$(env_or ADOPT_EXISTING no)" = yes ] ||
+      die "Proxmox already has objects pvewarden-setup did not create; rename or remove them, or set PVEWARDEN_ADOPT_EXISTING=yes to take them over (uninstall then deletes them):"$'\n'"$what"
+  else
+    whiptail --title "$TITLE" --defaultno --yesno "Proxmox already has objects that pvewarden-setup did not create:\n\n$what\n\nTake them over? pvewarden will change them as described, and 'uninstall' will delete them.\n\nNo = stop here; nothing has been changed." 22 90 ||
+      die "stopped: rename or remove the existing objects, then run the installer again"
+  fi
+  CLAIM_EXISTING=1
+}
+
 ensure_proxmox_access() {
   info "pool $POOL, role $ROLE, user $PVE_USER"
-  pvesh get "/pools/$POOL" >/dev/null 2>&1 || run pveum pool add "$POOL" --comment "guests pvewarden may manage"
-  if pveum role list --output-format json | json 'exit !grep { $_->{roleid} eq "'"$ROLE"'" } @$d'; then
+  if pool_exists; then
+    [ "${CLAIM_EXISTING:-0}" = 1 ] || owns POOL || die "pool $POOL exists and was not created by pvewarden-setup"
+  else
+    run pveum pool add "$POOL" --comment "guests pvewarden may manage"
+  fi
+  mark_owned POOL
+  if role_exists; then
+    [ "${CLAIM_EXISTING:-0}" = 1 ] || owns ROLE || die "role $ROLE exists and was not created by pvewarden-setup"
     run pveum role modify "$ROLE" --privs "${PRIVS// /,}"
   else
     run pveum role add "$ROLE" --privs "${PRIVS// /,}"
   fi
-  pvesh get "/access/users/$PVE_USER" >/dev/null 2>&1 ||
+  mark_owned ROLE
+  if user_exists; then
+    [ "${CLAIM_EXISTING:-0}" = 1 ] || owns USER || die "user $PVE_USER exists and was not created by pvewarden-setup"
+  else
     run pveum user add "$PVE_USER" --comment "pvewarden (API only, no login)"
+  fi
+  mark_owned USER
   run pveum acl modify "/pool/$POOL" --users "$PVE_USER" --roles "$ROLE"
 }
 
@@ -788,6 +833,7 @@ do_install() {
   fetch_source
   ask_container
   ask_access
+  check_name_collisions
   confirm "Please review:\n\n$(summary)\n\nProceed?" || die "cancelled"
   [ "$YES" = 1 ] && summary
   ensure_template
@@ -877,6 +923,12 @@ do_upgrade() {
   info "restarting the pvewarden service"
   slow pct exec "$CTID" -- systemctl restart pvewarden
   CT_IP=${CT_IP:-$LISTEN}
+  if [ ! -f "$OWNED" ]; then
+    # installed before 0.1.2, which created these (or took them over without asking)
+    mark_owned POOL
+    mark_owned ROLE
+    mark_owned USER
+  fi
   install_enroll_tool_keep_conf
   save_state
   if confirm "Enroll every guest in pool $POOL again (pvewarden-enroll --all)?\n\nThis updates the client on the guests and gives each guest its own SSH key. Since 0.1.2 the server refuses guests that have no key of their own, so say yes unless you will run pvewarden-enroll yourself."; then
@@ -925,9 +977,15 @@ do_uninstall() {
     run "$SBIN/pvewarden-enroll" --uninstall --all || true
   fi
   info "removing Proxmox user $PVE_USER (and its token), role $ROLE and pool $POOL"
-  pvesh get "/access/users/$PVE_USER" >/dev/null 2>&1 && run pveum user delete "$PVE_USER"
-  pveum role list --output-format json | json 'exit !grep { $_->{roleid} eq "'"$ROLE"'" } @$d' && run pveum role delete "$ROLE"
-  if pvesh get "/pools/$POOL" >/dev/null 2>&1; then
+  if user_exists; then
+    if owns USER; then run pveum user delete "$PVE_USER"; else echo "user $PVE_USER left alone: pvewarden-setup did not create it"; fi
+  fi
+  if role_exists; then
+    if owns ROLE; then run pveum role delete "$ROLE"; else echo "role $ROLE left alone: pvewarden-setup did not create it"; fi
+  fi
+  if pool_exists && ! owns POOL; then
+    echo "pool $POOL left alone: pvewarden-setup did not create it"
+  elif pool_exists; then
     # a pool must be empty before it can be deleted; guests stay, only the membership goes
     local members
     members=$(pvesh get "/pools/$POOL" --output-format json | json 'print join ",", map { $_->{vmid} } grep { defined $_->{vmid} } @{$d->{members}}')
@@ -948,7 +1006,7 @@ do_uninstall() {
     fi
   fi
   info "removing the tools from this host"
-  run rm -rf "$HOST_DIR" "$ETC" "$SBIN/pvewarden-enroll" "$SBIN/pvewarden-setup"
+  run rm -rf "$HOST_DIR" "$ETC" "$SBIN/pvewarden-enroll" "$SBIN/pvewarden-setup" # incl. $OWNED
   echo "pvewarden removed"
 }
 

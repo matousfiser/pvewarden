@@ -271,12 +271,29 @@ def test_pve8_gets_the_old_guest_agent_privilege_and_debian_12(host):
     assert any(c.endswith("VM.PowerMgmt,VM.Monitor") for c in calls if c.startswith("pveum role add"))
 
 
-def test_existing_role_is_updated_not_duplicated(host):
+def test_objects_someone_else_created_stop_the_install_before_any_change(host):
     host.mark("role", "pool", "user")
-    assert host.run("install", "--yes", **INSTALL_ENV).returncode == 0
+    r = host.run("install", "--yes", **INSTALL_ENV)
+    assert r.returncode == 1 and "did not create" in r.stderr and "PVEWARDEN_ADOPT_EXISTING=yes" in r.stderr
+    assert "- role Warden (its privileges would be set to" in r.stderr
+    changes = ("pct create", "pveum role add", "pveum role modify", "pveum pool", "pveum user", "pveum acl")
+    assert not [c for c in host.calls() if c.startswith(changes)]
+
+
+def test_taking_over_existing_objects_updates_them_and_records_it(host):
+    host.mark("role", "pool", "user")
+    assert host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_ADOPT_EXISTING="yes").returncode == 0
     calls = host.calls()
     assert any(c.startswith("pveum role modify Warden") for c in calls)
     assert not any(c.startswith(("pveum role add", "pveum pool add", "pveum user add")) for c in calls)
+    assert (host.state / "owned.conf").read_text().split() == ["POOL=1", "ROLE=1", "USER=1"]
+
+
+def test_objects_from_an_earlier_unfinished_install_are_reused_without_asking(host):
+    host.state.mkdir()
+    (host.state / "owned.conf").write_text("POOL=1\nROLE=1\nUSER=1\n")
+    host.mark("role", "pool", "user")
+    assert host.run("install", "--yes", **INSTALL_ENV).returncode == 0
 
 
 def test_custom_listen_address_without_tls(host):
@@ -414,6 +431,7 @@ def test_enroll_can_turn_guest_auto_updates_off(host):
 def test_uninstall_removes_access_and_keeps_container_unless_asked(host):
     host.state.mkdir()
     (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
+    (host.state / "owned.conf").write_text("POOL=1\nROLE=1\nUSER=1\n")
     host.mark("ct", "pool", "user", "role")
     r = host.run("uninstall", "--yes")
     assert r.returncode == 0, r.stderr
@@ -429,6 +447,27 @@ def test_uninstall_removes_access_and_keeps_container_unless_asked(host):
     (host.state / "setup.conf").write_text("CTID=120\n")
     host.run("uninstall", "--yes", PVEWARDEN_DESTROY_CT="yes")
     assert "pct destroy 120 --purge 1" in host.calls()
+
+
+def test_uninstall_leaves_objects_it_did_not_create(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
+    (host.state / "owned.conf").write_text("USER=1\n")  # the role and pool were there before
+    host.mark("ct", "pool", "user", "role")
+    r = host.run("uninstall", "--yes")
+    assert r.returncode == 0, r.stderr
+    calls = host.calls()
+    assert "pveum user delete pvewarden@pve" in calls
+    assert not any(c.startswith(("pveum role delete", "pveum pool delete", "pveum pool modify")) for c in calls)
+    assert "role Warden left alone" in r.stdout and "pool pvewarden left alone" in r.stdout
+
+
+def test_upgrade_from_an_older_install_records_its_objects_as_its_own(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    host.mark("ct")
+    assert host.run("upgrade", "--yes").returncode == 0
+    assert (host.state / "owned.conf").read_text().split() == ["POOL=1", "ROLE=1", "USER=1"]
 
 
 def test_requires_proxmox_8(host):

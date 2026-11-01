@@ -127,7 +127,8 @@ bash pvewarden-setup uninstall
 It removes, in this order:
 
 1. the client from every guest in the pool,
-2. the token, user, role and pool in Proxmox. Guests stay; only their pool membership goes.
+2. the token, user, role and pool in Proxmox, but only those that `pvewarden-setup` created (or that
+   you told it to take over). Guests stay; only their pool membership goes.
 3. the tools on the host.
 
 Guest tags are left in place. The container (with the audit log) is destroyed only if you confirm
@@ -148,6 +149,11 @@ Useful variables include `CTID`, `IP`, `GW`, `ROOT_PASSWORD`, `SSH_KEYS` (`gh:<u
 or a URL), `ACCESS` (`https` or `custom`), `LISTEN`, `USE_TLS`, `AGENT_NAME`, `ENROLL` (VMIDs),
 `LEVEL` (`readonly`, `update`, `reboot`) and `AUTO_UPDATES` (`keep`, `off`, `on`). Try it with
 `--dry-run` first.
+
+If Proxmox already has a pool `pvewarden`, a role `Warden` or a user `pvewarden@pve` that the
+installer did not create, it stops before changing anything. Interactively it asks whether to take
+them over; unattended, `PVEWARDEN_ADOPT_EXISTING=yes` does. Taking over sets the role's privileges
+(every user with that role gets exactly these) and lets `uninstall` delete the objects.
 
 ## Manual install
 
