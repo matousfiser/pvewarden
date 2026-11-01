@@ -121,6 +121,35 @@ blocked until a human has checked it (`pvewarden pending clear`); the agent cann
   private key is created in the container and never leaves it; only a signing request goes to the
   host.
 
+## Snapshots and rollback
+
+What a pvewarden snapshot is, so you know what a rollback brings back:
+
+- **Disk only, no RAM.** pvewarden asks Proxmox for a plain snapshot (no `vmstate`). Rolling back
+  to it is like the guest losing power at that moment and booting again: the file systems are
+  consistent (journaling), applications get what they had flushed to disk.
+- **VMs with the guest agent:** if the VM's *QEMU Guest Agent* option has *freeze/thaw* on (the
+  Proxmox default), Proxmox freezes the file systems for the snapshot. That makes it consistent at
+  the file system level, still not at the application level.
+- **Databases:** a crash-consistent copy is what their recovery is built for, but a rollback also
+  throws away everything written since the snapshot. Tag database guests with care, or dump the
+  database before you let an agent update them.
+- **Storage:** what a snapshot costs and whether it is possible at all depends on the storage
+  (ZFS, LVM-thin, Ceph, qcow2 yes; plain LVM or raw on directory storage no). If Proxmox cannot
+  snapshot a guest, `apply_updates` refuses to update it.
+- **After a rollback** Proxmox leaves the guest stopped; pvewarden starts it and reports only once
+  the guest answers over SSH again, with its kernel and pending reboot state. It does this check
+  after every rollback.
+
+## Known open points
+
+- **Which snapshots are pvewarden's** is decided by the name prefix `pvewarden_`. A snapshot someone
+  else names that way can be rolled back to or deleted by an agent with the update tag. Not closed;
+  accepted as lower priority because rollback and deletion require your confirmation in the client,
+  which the agent cannot give. Planned for 0.1.3: a record of the snapshots pvewarden took.
+- **Tested combinations.** Containers and VMs on Proxmox VE 9 with directory/LVM-thin storage and the
+  guest agent. Other storage and older versions should behave the same but are less tested.
+
 ## Supply chain
 
 - Releases are built by a GitHub Actions workflow after the full test suite, from the tagged commit.

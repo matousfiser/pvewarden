@@ -509,8 +509,8 @@ class App:
             started = True
         self.audit.write("rollback", vmid=vmid, snapshot=snapshot)
         res = {"vmid": vmid, "name": g.name, "rolled_back_to": snapshot, "started_after_rollback": started}
-        if started:  # like a reboot: report once the guest answers again, not while it still boots
-            res |= await self._wait_online(g, wait_s, interval, check_first=True)
+        # always: report once the guest answers again (and its state), not while it still boots
+        res |= await self._wait_online(g, wait_s, interval, check_first=True)
         return res
 
     async def delete_snapshot(self, vmid: int, snapshot: str) -> dict:

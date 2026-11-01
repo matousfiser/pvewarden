@@ -51,6 +51,14 @@
 - Release files get a signed build provenance attestation
   (`gh attestation verify <file> -R matousfiser/pvewarden`).
 
+**Rollback**
+- After every rollback pvewarden waits until the guest answers again and reports its state, also
+  when the guest kept running (before, only when it had to start it).
+- The security model documents what a snapshot is (disk only, crash-consistent; file system
+  consistent with the guest agent's freeze) and what that means for databases.
+- Open, accepted as lower priority for now: snapshots are recognised as pvewarden's by their name
+  prefix alone (rollback and deletion still need the user's confirmation). Planned for 0.1.3.
+
 **Installer**
 - A pool, role or user with pvewarden's names that the installer did not create is no longer taken
   over silently: the install stops before any change, or takes them over only when you say so

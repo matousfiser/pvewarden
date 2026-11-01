@@ -180,6 +180,19 @@ async def test_rollback_only_own_snapshots_and_starts_guest(app):
     assert [e[0] for e in app.pve.events] == ["rollback", "start"]
 
 
+async def test_rollback_checks_the_guest_also_when_it_kept_running(app):
+    # a guest that is still running after the rollback (a snapshot with RAM) is checked as well
+    app.pve.snaps[101] = [{"name": SNAPSHOT_PREFIX + "20260101_000000", "snaptime": 1_767_225_600}]
+
+    async def rollback_keeps_running(g, name):
+        app.pve.events.append(("rollback", g.vmid, name))
+
+    app.pve.rollback = rollback_keeps_running
+    res = await app.rollback(101, SNAPSHOT_PREFIX + "20260101_000000", interval=0)
+    assert res["started_after_rollback"] is False and res["back_online"] is True and "kernel" in res
+    assert "status" in app.runner.commands()
+
+
 async def test_delete_old_snapshots_only_touches_old_own_snapshots_on_tagged_guests(app):
     old, new = 1_000_000_000, 4_000_000_000  # 2001 and 2096
     app.pve.snaps[101] = [
