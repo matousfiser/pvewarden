@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 (2026-11-02)
 
 From a code review; no new features.
 
