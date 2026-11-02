@@ -810,11 +810,41 @@ def test_renew_cert_signs_a_new_certificate(host):
     assert "New certificate for 192.0.2.77 (pve-ca)" in r.stdout
 
 
-def test_renew_cert_refuses_plain_http(host):
-    host.state.mkdir()
-    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=10.0.0.5\n")
+def test_renew_cert_switches_plain_http_to_https(host, tmp_path):
+    # an install that chose plain HTTP inside a VPN
+    r = host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_ACCESS="custom", PVEWARDEN_LISTEN="10.200.0.200",
+                 PVEWARDEN_USE_TLS="no", FAKE_CT_ADDRS="192.0.2.50 10.200.0.200")  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    config = tmp_path / "config.toml"
+    config.write_text((host.pushed / "_etc_pvewarden_config.toml").read_text())
+    assert parse(tomllib.loads(config.read_text())).http.scheme == "http"
+
     r = host.run("renew-cert", "--yes", FAKE_NO_TLS=1)
-    assert r.returncode == 1 and "plain HTTP" in r.stderr
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = subprocess.run(
+        ["openssl", "x509", "-in", host.pushed / "_etc_pvewarden_tls.crt", "-noout", "-text"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "IP Address:10.200.0.200" in text
+    calls = host.calls()
+    assert any("sed -i" in c and "tls_cert" in c for c in calls)
+    assert "pct exec 120 -- systemctl restart pvewarden" in calls
+    assert "pvewarden now uses HTTPS" in r.stdout and "https://10.200.0.200:8765/mcp" in r.stdout
+    assert "PowerShell" in r.stdout  # how to trust the Proxmox CA
+
+    # the config edit the container runs, applied to the real config: the server then serves HTTPS
+    edit = 'eval "$(grep "^TLS_CONFIG_SED=" "$1")"; sed -i "$TLS_CONFIG_SED" "$2"'
+    subprocess.run(["bash", "-c", edit, "_", ROOT / "proxmox/pvewarden-setup", config], check=True)
+    http = parse(tomllib.loads(config.read_text())).http
+    assert http.scheme == "https" and http.listen == "10.200.0.200" and list(http.clients) == ["agent"]
+
+
+def test_vpn_access_defaults_to_https(host):
+    r = host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_ACCESS="custom", PVEWARDEN_LISTEN="10.200.0.200",
+                 FAKE_CT_ADDRS="192.0.2.50 10.200.0.200")  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "https://10.200.0.200:8765/mcp" in r.stdout
 
 
 def linux_trust_command(stdout: str) -> str:

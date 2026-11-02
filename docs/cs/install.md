@@ -10,7 +10,7 @@ Bez argumentů ukáže menu, s příkazem jde rovnou na věc:
 | `enroll` | Přidá hosty (nebo změní, co na nich agenti smějí) |
 | `connect` | Znovu ukáže, jak připojit agenta (bez tokenu) |
 | `token [jméno]` | Dá agentovi nový token; starý okamžitě přestane platit |
-| `renew-cert` | Nový HTTPS certifikát, např. po změně adresy serveru |
+| `renew-cert` | Nový HTTPS certifikát, např. po změně adresy serveru. U instalace s HTTP: přepnutí na HTTPS |
 | `doctor [-v]` | Zkontroluje instalaci a všechny hosty (samokontrola serveru) |
 | `upgrade` | Aktualizuje server a nástroje na hostu na nejnovější release |
 | `uninstall` | Odstraní pvewarden z hostů, z Proxmoxu i z tohoto nodu |
@@ -62,7 +62,8 @@ Otázky v pořadí:
      tvého Proxmoxu a klienti jí jednou začnou důvěřovat příkazem ze souhrnu.
    - *Přes VPN uvnitř kontejneru*, např. WireGuard. Zadáš VPN adresu kontejneru a server poslouchá
      jen na ní. VPN nastavíš po instalaci a server naběhne sám, jakmile adresa existuje:
-     [wireguard.md](wireguard.md). HTTP bez TLS tu stačí, VPN šifruje celou cestu.
+     [wireguard.md](wireguard.md). I tady je výchozí HTTPS: VPN sice šifruje sama, ale někteří MCP
+     klienti vzdálený server přes HTTP odmítnou.
 6. **Jméno prvního agenta.** Objevuje se v audit logu a v popisech snapshotů.
 7. **Kontrola.** Průvodce vypíše, co vytvoří. Dokud nepotvrdíš, nic se neděje.
 

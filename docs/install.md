@@ -10,7 +10,7 @@ arguments it shows a menu. With a command it goes straight to that task:
 | `enroll` | Add guests (or change what agents may do on them) |
 | `connect` | Show again how to connect an agent (without the token) |
 | `token [name]` | Give an agent a new token; the old one stops working at once |
-| `renew-cert` | New HTTPS certificate, e.g. after the server's address changed |
+| `renew-cert` | New HTTPS certificate, e.g. after the server's address changed. On an install with plain HTTP: switch to HTTPS |
 | `doctor [-v]` | Check the installation and every guest (the server's self-check) |
 | `upgrade` | Update the server and the host tools to the newest release |
 | `uninstall` | Remove pvewarden from guests, Proxmox and this host |
@@ -65,8 +65,8 @@ The questions, in order:
      Proxmox cluster's CA. Clients trust that CA once with a command from the summary.
    - *Through a VPN inside the container*, e.g. WireGuard. You give the container's VPN address; the
      server listens only there. You set the VPN up after the install, and the server starts by
-     itself once the address exists: [wireguard.md](wireguard.md). Plain HTTP is fine here, the VPN
-     encrypts the whole way.
+     itself once the address exists: [wireguard.md](wireguard.md). HTTPS is the default here too:
+     the VPN already encrypts, but some MCP clients refuse a remote server over plain HTTP.
 6. **Name of the first agent.** It appears in the audit log and in snapshot descriptions.
 7. **Review.** The wizard lists everything it is about to create. Nothing happens before you confirm.
 

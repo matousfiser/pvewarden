@@ -10,6 +10,9 @@ Clearer install, from the first production install:
   for the agents). A VPN address that is not up yet at the end of the install is the next step, not
   a failure: the summary says what to do, and the server starts by itself within 10 s once the
   address exists. New guide: docs/wireguard.md (also in Czech).
+- `pvewarden-setup renew-cert` switches an install made with plain HTTP to HTTPS on the same address
+  (certificate signed by the Proxmox CA; tokens stay). With a VPN address, the wizard now defaults
+  to HTTPS too: some MCP clients (NanoClaw) refuse a remote server over plain HTTP.
 - Enrolling: VMs whose QEMU guest agent does not answer are no longer offered (and skipped with
   `--yes`); the wizard lists them with the steps to add the agent, including the power cycle.
 - New `pvewarden-setup doctor [-v]`: the server's self-check from the host, without `runuser` and

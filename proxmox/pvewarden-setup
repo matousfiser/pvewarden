@@ -451,7 +451,7 @@ ask_access() {
   if [ "$ACCESS" = custom ]; then
     ask LISTEN "The container's address in the VPN, e.g. 10.200.0.200. The server listens only there.\n\nYou bring the VPN up in the container after the install (docs/wireguard.md). Until the address exists the server waits; it starts by itself within 10 s once it does." ""
     [ -n "$LISTEN" ] || die "an address is required"
-    choose USE_TLS "HTTPS on that address too?\n\nNot needed when the VPN ends in this container: WireGuard encrypts the whole way from the agent to the server." no no "No, plain HTTP inside the VPN" yes "Yes, certificate signed by the Proxmox CA"
+    choose USE_TLS "HTTPS on that address too?\n\nRecommended: some MCP clients refuse a remote server over plain HTTP. For the encryption alone it is not needed when the VPN ends in this container, as WireGuard encrypts the whole way from the agent." yes yes "Yes, certificate signed by the Proxmox CA" no "No, plain HTTP inside the VPN"
   else
     LISTEN="" USE_TLS=yes
   fi
@@ -741,6 +741,9 @@ issue_tls_cert() {
   # installs from before tls_ca: add it, so the server offers /ca.pem
   run pct exec "$CTID" -- sh -c "grep -q '^tls_ca' $CT_ETC/config.toml || sed -i '/^tls_key/a tls_ca = \"$CT_ETC/tls-ca.pem\"' $CT_ETC/config.toml"
 }
+
+# turns HTTPS on in the server config of an install made with plain HTTP (issue_tls_cert adds tls_ca)
+TLS_CONFIG_SED='/^\[http\]$/a tls_cert = "/etc/pvewarden/tls.crt"\ntls_key = "/etc/pvewarden/tls.key"'
 
 # tls_kind: how the installed server is reached: http, pve-ca or self-signed
 tls_kind() {
@@ -1205,7 +1208,10 @@ do_token() {
 do_renew_cert() {
   load_state
   [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
-  pct exec "$CTID" -- test -f "$CT_ETC/tls.crt" || die "this installation uses plain HTTP: there is no certificate"
+  pct exec "$CTID" -- test -f "$CT_ETC/tls.crt" || {
+    enable_https
+    return
+  }
   confirm "Issue a new TLS certificate for $LISTEN, signed by the Proxmox CA?\n\nClients that trust the Proxmox CA (pve-root-ca.pem) need nothing new. Clients that trusted the old self-signed certificate must switch to the Proxmox CA." ||
     die "cancelled"
   issue_tls_cert
@@ -1214,6 +1220,25 @@ do_renew_cert() {
   [ "$DRY_RUN" = 1 ] && return 0
   printf '\nNew certificate for %s (%s).\n' "$LISTEN" "$(tls_kind)"
   echo "Computers that already trust the Proxmox CA need nothing new. Others: pvewarden-setup connect"
+}
+
+# enable_https: switch an install made with plain HTTP to HTTPS on the same address
+enable_https() {
+  confirm "This installation uses plain HTTP. Switch it to HTTPS on $LISTEN?\n\nThe server gets a certificate signed by the Proxmox CA, like a new install. Tokens stay the same. Every agent then has to use https:// instead of http:// and trust the Proxmox CA once; the next screen shows how." ||
+    die "cancelled"
+  run pct exec "$CTID" -- sh -c "grep -q '^tls_cert' $CT_ETC/config.toml || sed -i '$TLS_CONFIG_SED' $CT_ETC/config.toml"
+  issue_tls_cert
+  info "restarting the pvewarden service"
+  slow pct exec "$CTID" -- systemctl restart pvewarden
+  [ "$DRY_RUN" = 1 ] && return 0
+  local url="https://$LISTEN:8765/mcp"
+  banner "${C_OK}pvewarden now uses HTTPS${C_OFF}"
+  echo
+  connection_fields "$url" "<the agent's token: unchanged>"
+  echo
+  echo " In every agent, replace the http:// address with this one, then:"
+  connect_steps "$url" "<token>"
+  line '='
 }
 
 # ============================================================================================
@@ -1279,7 +1304,7 @@ if [ -z "$COMMAND" ]; then
     upgrade "Upgrade an existing installation" \
     connect "Show how to connect an agent" \
     token "Give an agent a new token (the old one stops working)" \
-    renew_cert "New TLS certificate (e.g. after the server's address changed)" \
+    renew_cert "New TLS certificate (after an address change), or switch from HTTP to HTTPS" \
     doctor "Check the installation and every guest" \
     uninstall "Remove pvewarden"
 fi

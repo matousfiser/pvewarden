@@ -19,8 +19,9 @@ The guests do not need to be in the VPN. The agents do not need to reach the LAN
 1. **Network:** the container's LAN address, e.g. `10.100.0.200/24`, and the LAN gateway.
 2. **How agents reach the server:** *Through a VPN inside the container*.
 3. **The container's address in the VPN:** e.g. `10.200.0.200`.
-4. **HTTPS on that address too?** *No* is fine. WireGuard ends in the container itself, so the
-   traffic is encrypted all the way from the agent to the server.
+4. **HTTPS on that address too?** *Yes* (the default). WireGuard ends in the container itself, so
+   the traffic is encrypted all the way anyway, but some MCP clients refuse a remote server over
+   plain HTTP. With *No*, you can switch later: `pvewarden-setup renew-cert`.
 
 The address does not exist in the container yet, so at the end the wizard says
 "pvewarden is installed; it starts once 10.200.0.200 exists". That is expected. **Keep the agent
@@ -71,8 +72,11 @@ reboot it starts after `wg-quick@wg0`. On the Proxmox host:
 pvewarden-setup doctor
 ```
 
-The `HTTP` line shows `http://10.200.0.200:8765/mcp`. Connect your agents to that address
-(`pvewarden-setup connect` shows how).
+The `HTTP` line shows `https://10.200.0.200:8765/mcp`. Connect your agents to that address
+(`pvewarden-setup connect` shows how, including trusting the Proxmox CA once).
+
+**An install with plain HTTP** (`http://...`): `pvewarden-setup renew-cert` switches it to HTTPS on
+the same address. Tokens stay; agents change the address to `https://` and trust the Proxmox CA.
 
 ## Troubleshooting
 

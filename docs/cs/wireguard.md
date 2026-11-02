@@ -19,8 +19,9 @@ Hosté nemusí být ve VPN a agenti nemusí vidět do LAN.
 1. **Síť:** LAN adresa kontejneru, např. `10.100.0.200/24`, a brána LAN.
 2. **Jak se agenti připojí:** *Through a VPN inside the container*.
 3. **Adresa kontejneru ve VPN:** např. `10.200.0.200`.
-4. **HTTPS i na téhle adrese?** Stačí *No*. WireGuard končí přímo v kontejneru, takže provoz je
-   šifrovaný celou cestu od agenta až k serveru.
+4. **HTTPS i na téhle adrese?** *Yes* (výchozí). WireGuard končí přímo v kontejneru, takže provoz
+   je šifrovaný celou cestu i tak, ale někteří MCP klienti vzdálený server přes HTTP odmítnou.
+   S *No* jde HTTPS zapnout později: `pvewarden-setup renew-cert`.
 
 Adresa v kontejneru zatím neexistuje, proto průvodce na konci napíše
 „pvewarden is installed; it starts once 10.200.0.200 exists“. To je v pořádku. **Token agenta si
@@ -71,8 +72,11 @@ po `wg-quick@wg0`. Na Proxmox hostu:
 pvewarden-setup doctor
 ```
 
-Řádek `HTTP` ukáže `http://10.200.0.200:8765/mcp`. Na tu adresu připoj agenty
-(`pvewarden-setup connect` ukáže jak).
+Řádek `HTTP` ukáže `https://10.200.0.200:8765/mcp`. Na tu adresu připoj agenty
+(`pvewarden-setup connect` ukáže jak, včetně jednorázové důvěry v Proxmox CA).
+
+**Instalace s HTTP** (`http://...`): `pvewarden-setup renew-cert` ji přepne na HTTPS na stejné
+adrese. Tokeny zůstanou; agenti změní adresu na `https://` a začnou důvěřovat Proxmox CA.
 
 ## Když to nejde
 
