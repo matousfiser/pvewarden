@@ -102,9 +102,9 @@ When the agent runs in a container, the CA and the variable must be inside that 
 If changing the agent's container is impractical, two alternatives need no certificate on the
 client:
 
-- **Plain HTTP inside a network you trust.** At install, choose "My own address" and no HTTPS. A
-  WireGuard tunnel is the usual choice: it already encrypts and authenticates the traffic, so TLS
-  on top adds nothing.
+- **Plain HTTP inside a VPN that ends in the server container.** At install, choose "Through a VPN
+  inside the container" and no HTTPS. WireGuard is the usual choice: it already encrypts and
+  authenticates the traffic, so TLS on top adds nothing. Setup: [wireguard.md](wireguard.md).
 - **A reverse proxy with a publicly trusted certificate.** For example Caddy or Traefik with a
   Let's Encrypt certificate (DNS challenge) for a name in your own domain, forwarding to
   pvewarden. Clients then need no extra trust at all.

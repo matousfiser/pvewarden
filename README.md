@@ -41,14 +41,17 @@ Details: [docs/security.md](docs/security.md).
 
 ## Requirements
 
-- Proxmox VE 8 or 9. You run the installer as root on a node.
+- Proxmox VE 8 or 9. You run the installer as root on a node (`sudo -i` first if you log in as a
+  normal user).
 - Guests: Debian 12/13 or Ubuntu 22.04+, as LXC containers or VMs.
-  - VMs need `qemu-guest-agent` running, so pvewarden can find their address and enroll them.
+  - VMs need the QEMU guest agent, so pvewarden can find their address and enroll them
+    ([how to add it](docs/install.md#before-you-start)).
 - An MCP client that supports streamable HTTP. Claude Code works. For the confirmation dialogs the
   client must support MCP elicitation. Without it, rollback and the other confirmed actions are
   refused; see [configuration](docs/configuration.md#policy).
-- Network: the agent's computer must reach the pvewarden container on TCP 8765. The container
-  must reach the guests over SSH.
+- Network: the agent's computer must reach the pvewarden container on TCP 8765, on its LAN address
+  or through a VPN inside the container ([WireGuard](docs/wireguard.md)). The container must reach
+  the guests over SSH.
 
 ## Install
 
@@ -60,7 +63,8 @@ less pvewarden-setup        # it is a readable shell script, worth a look before
 bash pvewarden-setup
 ```
 
-`pvewarden-setup` checks the checksum of everything it downloads. To check the script itself, compare
+`pvewarden-setup` checks the checksum of everything it downloads. Checking the script itself is
+optional: compare
 `sha256sum pvewarden-setup` with `SHA256SUMS` on the [release page](https://github.com/matousfiser/pvewarden/releases/latest).
 Release files also carry a signed build provenance: with the GitHub CLI,
 `gh attestation verify pvewarden-setup -R matousfiser/pvewarden` proves the file was built by this
@@ -148,6 +152,7 @@ installed, since other things may use them.
 
 - [Install, upgrade, remove](docs/install.md)
 - [Connecting MCP clients](docs/clients.md)
+- [Reaching the server through WireGuard](docs/wireguard.md)
 - [Configuration](docs/configuration.md)
 - [Security model](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)

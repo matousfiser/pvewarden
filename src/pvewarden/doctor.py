@@ -32,7 +32,7 @@ DANGEROUS_PRIVS = {
 
 @dataclass
 class Result:
-    status: str  # ok | warn | fail
+    status: str  # ok | info | warn | fail
     title: str
     detail: str = ""
     hint: str = ""
@@ -41,6 +41,11 @@ class Result:
 
 def ok(title, detail=""):
     return Result("ok", title, detail)
+
+
+def info(title, detail="", hint=""):
+    """Not a problem: something worth knowing, e.g. a choice with consequences."""
+    return Result("info", title, detail, hint)
 
 
 def warn(title, detail="", hint=""):
@@ -250,12 +255,25 @@ async def check_guests(app: App) -> list[Result]:
             allowed = [name for name, on in (("update", d["may_update"]), ("reboot", d["may_reboot"])) if on]
             detail = f"{address}, {os_name}, allowed: {', '.join(allowed) or 'read-only'}"
             if "auto_updates=yes" in out.splitlines():
-                detail += ", automatic updates on (no snapshots)"
+                detail += ", automatic updates on"
+                auto.append(g.vmid)
             result = ok(title, detail)
         result.raw = f"ssh {app.cfg.ssh.user}@{address} status -> exit {rc}\n{out.strip()}"
         return result
 
-    return list(await asyncio.gather(*(one(g) for g in guests)))
+    auto: list[int] = []
+    results = list(await asyncio.gather(*(one(g) for g in guests)))
+    if auto:
+        results.append(
+            info(
+                "Automatic updates",
+                f"on for {', '.join(map(str, sorted(auto)))}: these guests install updates daily by themselves "
+                "(unattended-upgrades), without a pvewarden snapshot",
+                "fine if you want fixes the same day; for a snapshot before every change, on the Proxmox host: "
+                "pvewarden-enroll --auto-updates off <vmid>",
+            )
+        )
+    return results
 
 
 async def run_checks(app: App) -> list[Result]:
@@ -265,7 +283,7 @@ async def run_checks(app: App) -> list[Result]:
     return results
 
 
-MARK = {"ok": "[ OK ]", "warn": "[WARN]", "fail": "[FAIL]"}
+MARK = {"ok": "[ OK ]", "info": "[INFO]", "warn": "[WARN]", "fail": "[FAIL]"}
 
 
 def render(results: list[Result], verbose: bool = False) -> str:

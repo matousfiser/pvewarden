@@ -1,6 +1,7 @@
 # Install, upgrade, remove
 
-Everything is done by one script, `pvewarden-setup`, run as root on a Proxmox VE node. Without
+Everything is done by one script, `pvewarden-setup`, run as root on a Proxmox VE node. If you log in
+as a normal user, `sudo -i` first: `pct`, `qm` and `pvesh` are only in root's `PATH`. Without
 arguments it shows a menu. With a command it goes straight to that task:
 
 | Command | What it does |
@@ -10,6 +11,7 @@ arguments it shows a menu. With a command it goes straight to that task:
 | `connect` | Show again how to connect an agent (without the token) |
 | `token [name]` | Give an agent a new token; the old one stops working at once |
 | `renew-cert` | New HTTPS certificate, e.g. after the server's address changed |
+| `doctor [-v]` | Check the installation and every guest (the server's self-check) |
 | `upgrade` | Update the server and the host tools to the newest release |
 | `uninstall` | Remove pvewarden from guests, Proxmox and this host |
 
@@ -25,8 +27,13 @@ local copy instead of downloading the release.
   server only from that address. If it changes anyway, see
   [The server's address changed](troubleshooting.md#the-servers-address-changed).
 - **Guests:** Debian 12/13 or Ubuntu 22.04 and newer, running, with network access to their package
-  mirrors. VMs need `qemu-guest-agent` installed and the *QEMU Guest Agent* option enabled in
-  Proxmox. pvewarden uses it to install its client and to find the VM's address.
+  mirrors. VMs need the QEMU guest agent: pvewarden uses it to install its client and to find the
+  VM's address. VMs without it are not offered when you enroll. To add it:
+  ```
+  apt install qemu-guest-agent              # in the VM
+  qm set <vmid> --agent enabled=1           # on the Proxmox host
+  qm shutdown <vmid> && qm start <vmid>     # a reboot from inside the VM is not enough
+  ```
 - **Storage:** pvewarden takes snapshots of guests before updates, so guest disks must be on storage
   that supports snapshots (ZFS, LVM-thin, Ceph RBD, qcow2 files). Snapshots of guests on plain LVM or
   raw files fail, and updates of those guests are refused.
@@ -46,15 +53,20 @@ The questions, in order:
    and VLAN.
 2. **Network.** An IPv4 address with prefix (e.g. `192.168.1.50/24`) and gateway, or `dhcp`. Then,
    optionally, IPv6, DNS servers and search domain; empty means the same as the host.
-3. **Root password** for the container. Empty means no password; you can still use `pct enter`.
-4. **SSH keys** for root in the container: from your GitHub or GitLab account (the public keys at
+3. **Root password** for the container. It works on the console only (Proxmox UI → container →
+   Console, or `pct enter <ctid>` on the host): Debian refuses root passwords over SSH. Empty means
+   no password; `pct enter` works anyway.
+4. **SSH keys** for root in the container, the only way to log in as root over SSH: from your GitHub or GitLab account (the public keys at
    `github.com/<user>.keys`), pasted, from a file or a URL, or none. The wizard shows the fingerprints
    of every key it adds, so you can compare them with your own.
-5. **How agents reach the server.**
-   - *HTTPS on the container's address* (recommended). The certificate is signed by your Proxmox
-     cluster's CA. Clients trust that CA once with a command from the summary.
-   - *My own address*, e.g. a WireGuard IP you configure in the container yourself. You can choose
-     plain HTTP here, which is fine inside an encrypted VPN.
+5. **How agents reach the server.** The container reaches the guests from its LAN address either
+   way.
+   - *On the container's LAN address, over HTTPS* (recommended). The certificate is signed by your
+     Proxmox cluster's CA. Clients trust that CA once with a command from the summary.
+   - *Through a VPN inside the container*, e.g. WireGuard. You give the container's VPN address; the
+     server listens only there. You set the VPN up after the install, and the server starts by
+     itself once the address exists: [wireguard.md](wireguard.md). Plain HTTP is fine here, the VPN
+     encrypts the whole way.
 6. **Name of the first agent.** It appears in the audit log and in snapshot descriptions.
 7. **Review.** The wizard lists everything it is about to create. Nothing happens before you confirm.
 
@@ -76,7 +88,8 @@ token is shown only once.** If you lose it, `pvewarden-setup token` makes a new 
 ## Enroll guests
 
 `pvewarden-setup enroll` (or the question at the end of the install) shows a checklist of guests.
-Then it asks:
+VMs whose guest agent does not answer are not in it; the wizard lists them and says how to add the
+agent ([Before you start](#before-you-start)). Then it asks:
 
 - **What agents may do** on them:
   - *read only:* no tags,
@@ -86,6 +99,10 @@ Then it asks:
   - *keep* (default) leaves each guest's setting alone,
   - *off* means only pvewarden installs updates, always with a snapshot,
   - *on* means guests also update themselves daily.
+
+  With automatic updates on, security fixes arrive the same day, but there is no snapshot to roll
+  back to. Ubuntu has them on by default. `pvewarden-setup doctor` lists the guests where they are on.
+  To turn them off later: `pvewarden-enroll --auto-updates off <vmid>`.
 
 Enrolling adds the guest to the pool, merges the tags and installs the client. It is safe to run
 again: re-enrolling refreshes the client, for example after an upgrade of pvewarden. What the client
@@ -120,10 +137,11 @@ again (0.1.0 and 0.1.1 even downgrade the server). Download the current one firs
 
 ```
 curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pvewarden-setup
-curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS
 bash ./pvewarden-setup upgrade
 ```
+
+It checks the checksum of everything it downloads. Checking the script itself is optional; the
+[README](../README.md#install) says how.
 
 This updates the server in its container and the tools on the host. The configuration, tokens, guest
 keys, audit log and certificate are kept. It then offers to enroll every guest again

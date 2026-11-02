@@ -34,6 +34,7 @@ esac
     "pvesh": """case "$1 $2" in
   "get /cluster/nextid") echo 120 ;;
   "get /cluster/resources") cat "$FAKE/resources.json" ;;
+  create\\ /nodes/*/agent/ping) v=${2#*/qemu/}; [[ " ${FAKE_NO_AGENT:-} " != *" ${v%%/*} "* ]] ;;
   "get /pools/pvewarden") [ -f "$FAKE/pool" ] && echo '{"members":[{"vmid":101},{"vmid":102}]}' || exit 2 ;;
   "get /access/users/pvewarden@pve") [ -f "$FAKE/user" ] || exit 2 ;;
   "get /access/users/pvewarden@pve/token/server") [ -f "$FAKE/token" ] || exit 2 ;;
@@ -57,6 +58,7 @@ esac
     case "$*" in
       *chpasswd*) cat > "$FAKE/chpasswd.stdin" ;;
       "ip -4 -o addr show dev eth0") echo "2: eth0    inet 192.0.2.50/24 brd 192.0.2.255 scope global eth0" ;;
+      "ip -o addr show") for a in ${FAKE_CT_ADDRS:-192.0.2.50}; do echo "2: eth0    inet $a/24 scope global eth0"; done ;;
       *install-server.sh*) [ -z "$FAKE_SERVER_INSTALL_FAILS" ] || exit 1 ;;
       *python3*) echo "192.0.2.0/24" ;;
       "test -f /etc/pvewarden/id_ed25519") [ -f "$FAKE/shared_key" ] ;;
@@ -434,6 +436,37 @@ def test_enroll_can_turn_guest_auto_updates_off(host):
     assert "ENROLL --pool --auto-updates off --tags pvewarden-update 101" in host.calls()
 
 
+def test_enroll_skips_a_vm_without_a_guest_agent(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
+    r = host.run("enroll", "--yes", PVEWARDEN_ENROLL="101 102", PVEWARDEN_LEVEL="update", FAKE_NO_AGENT="102")
+    assert r.returncode == 0, r.stderr
+    assert "skipping VM 102: its QEMU guest agent does not answer" in r.stderr
+    assert "ENROLL --pool --auto-updates keep --tags pvewarden-update 101" in host.calls()
+
+
+def test_interactive_enroll_explains_vms_without_a_guest_agent(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
+    (host.path / "bin/whiptail").write_text(SCRIPTED_WHIPTAIL)
+    (host.path / "fake/answers").write_text("101\nupdate\nkeep\n")
+    r = host.run("enroll", FAKE_NO_AGENT="102")
+    assert r.returncode == 0, r.stdout + r.stderr
+    dialogs = (host.path / "fake/dialogs.log").read_text().splitlines()
+    msg = next(d for d in dialogs if d.startswith("--msgbox"))
+    assert "102 db" in msg and "qm set <vmid> --agent enabled=1" in msg and "shut the VM down" in msg
+    checklist = next(d for d in dialogs if d.startswith("--checklist"))
+    assert " 101 " in checklist and " 102 " not in checklist and " 120 " not in checklist
+
+
+def test_doctor_runs_in_the_server_container(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
+    r = host.run("doctor", "-v")
+    assert r.returncode == 0, r.stderr
+    assert "pct exec 120 -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor -v" in host.calls()
+
+
 def test_uninstall_removes_access_and_keeps_container_unless_asked(host):
     host.state.mkdir()
     (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
@@ -570,6 +603,26 @@ def test_interactive_advanced_install_uses_every_answer(host, keys):
     assert (host.path / "fake/chpasswd.stdin").read_text() == "root:s3cret-pass\n"
     cfg = parse(tomllib.loads((host.pushed / "_etc_pvewarden_config.toml").read_text()))
     assert list(cfg.http.clients) == ["claude"] and cfg.http.hostnames == ("warden",)
+    dialogs = (host.path / "fake/dialogs.log").read_text()
+    assert "It works on the console only" in dialogs  # a root password is no SSH login
+    assert "set (console and 'pct enter' only, not SSH)" in r.stdout + dialogs
+
+
+def test_install_with_a_vpn_address_that_is_not_up_yet(host):
+    r = host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_ACCESS="custom", PVEWARDEN_LISTEN="10.200.0.200",
+                 PVEWARDEN_USE_TLS="no")  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    # not a failure: the next step, with the token still shown once
+    assert "it starts once 10.200.0.200 exists" in r.stdout and "docs/wireguard.md" in r.stdout
+    assert "NOT working" not in r.stdout and "Authorization: Bearer " in r.stdout
+    assert "http://10.200.0.200:8765/mcp" in r.stdout
+
+
+def test_install_with_a_vpn_address_that_is_up(host):
+    r = host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_ACCESS="custom", PVEWARDEN_LISTEN="10.200.0.200",
+                 PVEWARDEN_USE_TLS="no", FAKE_CT_ADDRS="192.0.2.50 10.200.0.200")  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "pvewarden is ready" in r.stdout and "starts once" not in r.stdout
 
 
 def test_interactive_cancel_stops_before_any_change(host):

@@ -11,7 +11,7 @@ nástrojů a co smí, rozhoduje Proxmox a server, ne prompt.
 > 22.04/24.04/26.04, kontejnery i VM. Zpětná vazba a issues jsou vítané.
 
 Podrobná dokumentace je v angličtině: [README](../../README.md), [instalace](install.md) (česky),
-[připojení klientů](../clients.md), [konfigurace](../configuration.md),
+[připojení klientů](../clients.md), [WireGuard](wireguard.md) (česky), [konfigurace](../configuration.md),
 [bezpečnostní model](../security.md), [řešení problémů](../troubleshooting.md).
 
 ```
@@ -41,13 +41,15 @@ Agent:  ct101: snapshot pvewarden_20261031_145241, 4 balíky nainstalovány, slu
 
 ## Požadavky
 
-- Proxmox VE 8 nebo 9. Instalátor spouštíš jako root na nodu.
+- Proxmox VE 8 nebo 9. Instalátor spouštíš jako root na nodu (jako běžný uživatel nejdřív `sudo -i`).
 - Hosté: Debian 12/13 nebo Ubuntu 22.04+, kontejnery LXC i VM.
-  - VM potřebují běžící `qemu-guest-agent`, aby je pvewarden našel a mohl zapsat.
+  - VM potřebují QEMU guest agenta, aby je pvewarden našel a mohl zapsat
+    ([jak ho přidat](install.md#než-začneš)).
 - MCP klient se streamable HTTP, např. Claude Code. Pro potvrzovací dialogy musí umět MCP
   elicitation, jinak se rollback a ostatní potvrzované akce odmítnou.
-- Síť: počítač s agentem musí dosáhnout na kontejner pvewarden na TCP 8765. Kontejner musí
-  dosáhnout na hosty přes SSH.
+- Síť: počítač s agentem musí dosáhnout na kontejner pvewarden na TCP 8765, na jeho LAN adrese,
+  nebo přes VPN uvnitř kontejneru ([WireGuard](wireguard.md)). Kontejner musí dosáhnout na hosty
+  přes SSH.
 
 ## Instalace
 
@@ -58,6 +60,13 @@ curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pv
 less pvewarden-setup        # čitelný shellový skript, stojí za to ho projít, než ho spustíš jako root
 bash pvewarden-setup
 ```
+
+`pvewarden-setup` ověří kontrolní součet všeho, co stahuje. Samotný skript můžeš ověřit volitelně:
+porovnej `sha256sum pvewarden-setup` se souborem `SHA256SUMS` na
+[stránce vydání](https://github.com/matousfiser/pvewarden/releases/latest). Soubory vydání mají
+i podepsaný původ sestavení: s GitHub CLI
+`gh attestation verify pvewarden-setup -R matousfiser/pvewarden` ověří, že soubor sestavil release
+workflow tohoto repozitáře.
 
 Průvodce se zeptá na pár věcí a pak:
 

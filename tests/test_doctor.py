@@ -23,15 +23,23 @@ def by_title(results):
 
 async def test_healthy_setup_has_no_failures(healthy):
     results = await run_checks(healthy)
-    assert [r for r in results if r.status != "ok"] == []
+    assert [r for r in results if r.status not in ("ok", "info")] == []
     titles = by_title(results)
     assert "Proxmox VE 9.0.10" in titles["Proxmox API"].detail
     assert titles["Guest 101 web"].detail == (
-        "192.0.2.11, Ubuntu 24.04.1 LTS, allowed: update, reboot, automatic updates on (no snapshots)"
+        "192.0.2.11, Ubuntu 24.04.1 LTS, allowed: update, reboot, automatic updates on"
     )
-    assert titles["Guest 103 readonly"].detail.endswith("allowed: read-only, automatic updates on (no snapshots)")
+    assert titles["Guest 103 readonly"].detail.endswith("allowed: read-only, automatic updates on")
     assert "Guest 104 off" not in titles  # stopped guests are not contacted
     assert "[FAIL]" not in render(results)
+
+
+async def test_automatic_updates_are_explained_once_not_flagged(healthy):
+    results = await run_checks(healthy)
+    note = by_title(results)["Automatic updates"]
+    assert note.status == "info" and note.detail.startswith("on for 101, 102, 103:")
+    assert "without a pvewarden snapshot" in note.detail and "--auto-updates off" in note.hint
+    assert "[INFO]" in render(results)
 
 
 async def test_pve8_monitor_privilege_is_accepted_for_the_guest_agent(healthy):

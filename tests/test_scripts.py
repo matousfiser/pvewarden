@@ -254,7 +254,7 @@ def test_a_network_in_from_is_not_compared(enroll):
 def test_enroll_continues_after_failures(enroll):
     r = enroll("203", "999", "201")
     assert r.returncode == 1
-    assert "qemu-guest-agent not responding" in r.stderr
+    assert "VM 203: the QEMU guest agent does not answer" in r.stderr and "qm set 203 --agent enabled=1" in r.stderr
     assert "VMID 999 not found" in r.stderr
     assert "FAILED: 203 999" in r.stdout
     assert "SERVER key activate 201" in r.steps  # 201 still enrolled

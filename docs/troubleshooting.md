@@ -2,14 +2,14 @@
 
 ## First: `doctor`
 
-In the server container (`pct enter <ctid>` on the host):
+On the Proxmox host, as root:
 
 ```
-runuser -u pvewarden -- pvewarden doctor        # add -v to see what each check saw
+pvewarden-setup doctor        # add -v to see what each check saw
 ```
 
-Or from the host, with the full path (`pct exec` has no `/usr/local/bin` in `PATH`):
-`pct exec <ctid> -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor`
+Inside the server container (`pct enter <ctid>`) the same is
+`runuser -u pvewarden -- pvewarden doctor`.
 
 It checks the config, the Proxmox API and the token's privileges (too few *and* too many). Then it
 connects over SSH to every guest in the pool. Every failure comes with a hint. `pvewarden-setup`
@@ -26,6 +26,19 @@ All paths are in the server container.
 | Full apt output of each update | `/var/lib/pvewarden/runs/<time>_<vmid>_<name>_<mode>.log` (kept 180 days) |
 | Snapshots, rollbacks, reboots | Proxmox UI → node → Task History (user `pvewarden@pve`) |
 | The last update, on the guest itself | `/var/lib/pvewarden/upgrade.log` |
+
+## Logging in to the server container
+
+**SSH as root says `Permission denied` with the right password:** Debian refuses root passwords over
+SSH (`PermitRootLogin prohibit-password`); the password works on the console only. Use
+`pct enter <ctid>` on the host or the console in the Proxmox UI. For SSH, copy your **public** key
+(e.g. `id_ed25519.pub`, never the private key) to the host and add it there:
+
+```
+pct exec <ctid> -- sh -c 'mkdir -p -m 700 /root/.ssh && cat >> /root/.ssh/authorized_keys' < id_ed25519.pub
+```
+
+**`qm: command not found` / `pct: command not found`:** you are not root. `sudo -i` first.
 
 ## Connecting the agent
 
@@ -107,10 +120,8 @@ pct exec $CT -- systemctl restart pvewarden
 pvewarden-enroll --all
 # the new URL for your agents (the token stays the same)
 pvewarden-setup connect
+pvewarden-setup doctor
 ```
-
-`pct exec` runs commands without `/usr/local/bin` in `PATH`; call the server as
-`pct exec $CT -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor`.
 
 ## Updates
 

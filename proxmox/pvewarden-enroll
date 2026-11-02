@@ -85,7 +85,8 @@ run_qemu() {
     return 1
   }
   qm agent "$id" ping 2>/dev/null || {
-    echo "VM $id: qemu-guest-agent not responding (install it, or run guest/install.sh by hand)" >&2
+    echo "VM $id: the QEMU guest agent does not answer; enrolling a VM needs it. In the VM: apt install qemu-guest-agent;" >&2
+    echo "  on this host: qm set $id --agent enabled=1; then shut the VM down and start it again (a reboot inside is not enough)" >&2
     return 1
   }
   # qm guest exec prints JSON; relay output and exit code

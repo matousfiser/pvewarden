@@ -1,7 +1,8 @@
 # Instalace, aktualizace, odstranění
 
-Všechno dělá jeden skript, `pvewarden-setup`. Spouští se jako root na nodu Proxmox VE. Bez argumentů
-ukáže menu, s příkazem jde rovnou na věc:
+Všechno dělá jeden skript, `pvewarden-setup`. Spouští se jako root na nodu Proxmox VE. Pokud se
+přihlašuješ jako běžný uživatel, nejdřív `sudo -i`: `pct`, `qm` a `pvesh` jsou jen v `PATH` roota.
+Bez argumentů ukáže menu, s příkazem jde rovnou na věc:
 
 | Příkaz | Co dělá |
 |---|---|
@@ -10,6 +11,7 @@ ukáže menu, s příkazem jde rovnou na věc:
 | `connect` | Znovu ukáže, jak připojit agenta (bez tokenu) |
 | `token [jméno]` | Dá agentovi nový token; starý okamžitě přestane platit |
 | `renew-cert` | Nový HTTPS certifikát, např. po změně adresy serveru |
+| `doctor [-v]` | Zkontroluje instalaci a všechny hosty (samokontrola serveru) |
 | `upgrade` | Aktualizuje server a nástroje na hostu na nejnovější release |
 | `uninstall` | Odstraní pvewarden z hostů, z Proxmoxu i z tohoto nodu |
 
@@ -24,7 +26,13 @@ nainstaluje lokální kopii místo stažení vydání.
   zadej statickou IP, nebo adresu zarezervuj v DHCP. Hosté server přijmou jen z této adresy. Když se
   přesto změní, postup je v [troubleshooting.md](../troubleshooting.md#the-servers-address-changed).
 - **Hosté:** Debian 12/13 nebo Ubuntu 22.04 a novější, zapnutí a s přístupem k zrcadlům balíků. VM
-  potřebují nainstalovaný `qemu-guest-agent` a zapnutou volbu *QEMU Guest Agent* v Proxmoxu.
+  potřebují QEMU guest agenta: přes něj pvewarden instaluje klienta a zjišťuje adresu VM. VM bez
+  něj se při zápisu nenabídnou. Přidání agenta:
+  ```
+  apt install qemu-guest-agent              # ve VM
+  qm set <vmid> --agent enabled=1           # na Proxmox hostu
+  qm shutdown <vmid> && qm start <vmid>     # restart zevnitř VM nestačí
+  ```
 - **Úložiště:** před aktualizací se dělá snapshot, takže disky hostů musí být na úložišti se
   snapshoty (ZFS, LVM-thin, Ceph RBD, soubory qcow2). Na obyčejném LVM nebo raw souborech snapshot
   selže a aktualizace se odmítne.
@@ -43,15 +51,18 @@ Otázky v pořadí:
    *Pokročilé* dovolí nastavit ID, hostname, úložiště, velikost, bridge a VLAN.
 2. **Síť.** IPv4 adresa s prefixem (např. `192.168.1.50/24`) a brána, nebo `dhcp`. Volitelně IPv6,
    DNS servery a doména. Prázdné znamená stejné jako na hostu.
-3. **Heslo roota** v kontejneru. Prázdné znamená bez hesla, `pct enter` funguje vždy.
-4. **SSH klíče** pro roota v kontejneru: z účtu na GitHubu nebo GitLabu (veřejné klíče
+3. **Heslo roota** v kontejneru. Platí jen na konzoli (Proxmox UI → kontejner → Console, nebo
+   `pct enter <ctid>` na hostu): Debian heslo roota přes SSH odmítá. Prázdné znamená bez hesla,
+   `pct enter` funguje vždy.
+4. **SSH klíče** pro roota v kontejneru, jediný způsob, jak se jako root přihlásit přes SSH: z účtu na GitHubu nebo GitLabu (veřejné klíče
    z `github.com/<uživatel>.keys`), vložené, ze souboru, z URL, nebo žádné. Průvodce ukáže otisky
    přidaných klíčů, abys je porovnal se svými.
-5. **Jak se agenti připojí.**
-   - *HTTPS na adrese kontejneru* (doporučeno). Certifikát podepíše certifikační autorita tvého
-     Proxmoxu a klienti jí jednou začnou důvěřovat příkazem ze souhrnu.
-   - *Moje vlastní adresa*, např. WireGuard IP, kterou si v kontejneru nastavíš sám. Tady jde zvolit
-     i HTTP bez šifrování, což uvnitř VPN stačí.
+5. **Jak se agenti připojí.** K hostům se kontejner v obou případech připojuje ze své LAN adresy.
+   - *Na LAN adrese kontejneru přes HTTPS* (doporučeno). Certifikát podepíše certifikační autorita
+     tvého Proxmoxu a klienti jí jednou začnou důvěřovat příkazem ze souhrnu.
+   - *Přes VPN uvnitř kontejneru*, např. WireGuard. Zadáš VPN adresu kontejneru a server poslouchá
+     jen na ní. VPN nastavíš po instalaci a server naběhne sám, jakmile adresa existuje:
+     [wireguard.md](wireguard.md). HTTP bez TLS tu stačí, VPN šifruje celou cestu.
 6. **Jméno prvního agenta.** Objevuje se v audit logu a v popisech snapshotů.
 7. **Kontrola.** Průvodce vypíše, co vytvoří. Dokud nepotvrdíš, nic se neděje.
 
@@ -71,8 +82,9 @@ ztratíš, `pvewarden-setup token` vytvoří nový. Připojení klientů: [clien
 
 ## Zapsání hostů
 
-`pvewarden-setup enroll` (nebo otázka na konci instalace) ukáže seznam hostů k zaškrtnutí a pak se
-zeptá:
+`pvewarden-setup enroll` (nebo otázka na konci instalace) ukáže seznam hostů k zaškrtnutí. VM,
+jejichž guest agent neodpovídá, v něm nejsou; průvodce je vypíše a řekne, jak agenta přidat
+([Než začneš](#než-začneš)). Pak se zeptá:
 
 - **Co agenti smějí:**
   - *jen číst:* bez tagů,
@@ -82,6 +94,10 @@ zeptá:
   - *ponechat* (výchozí) nechá nastavení každého hosta, jak je,
   - *vypnout* znamená, že aktualizace instaluje jen pvewarden, vždy se snapshotem,
   - *zapnout* znamená, že se hosté aktualizují i sami každý den.
+
+  Se zapnutými automatickými aktualizacemi přijdou bezpečnostní opravy ještě týž den, ale bez
+  snapshotu, ke kterému by šlo se vrátit. Ubuntu je má zapnuté od výrobce. `pvewarden-setup doctor`
+  vypíše hosty, kde jsou zapnuté. Vypnutí později: `pvewarden-enroll --auto-updates off <vmid>`.
 
 Zapsání přidá hosta do poolu, doplní tagy, nainstaluje klienta a vytvoří pro hosta vlastní SSH
 klíč. Host přijme jen ten svůj, takže ani napadený host nedokáže server poslat k jinému hostovi.
@@ -113,10 +129,11 @@ na serveru běží (pokud to opravdu chceš: `--allow-downgrade`).
 
 ```
 curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pvewarden-setup
-curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS
 bash ./pvewarden-setup upgrade
 ```
+
+Kontrolní součet všeho, co stahuje, ověří sám. Ověření samotného skriptu je volitelné, postup je
+v [README](README.md#instalace).
 
 Aktualizuje server v kontejneru a nástroje na hostu. Konfigurace, tokeny, klíče hostů, audit log
 i certifikát zůstanou. Pak nabídne znovu zapsat všechny hosty, čímž se obnoví jejich klient.

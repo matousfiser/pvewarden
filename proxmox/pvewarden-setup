@@ -1,7 +1,8 @@
 #!/bin/bash
 # pvewarden-setup — install, upgrade or remove pvewarden. Run as root on a Proxmox VE host.
-#   pvewarden-setup [install|upgrade|enroll|connect|token|renew-cert|uninstall] [--yes] [--dry-run] [--source DIR|TARBALL]
+#   pvewarden-setup [install|upgrade|enroll|connect|token|renew-cert|doctor|uninstall] [--yes] [--dry-run] [--source DIR|TARBALL]
 #     no command      interactive menu
+#     doctor [-v]     check the installation (pvewarden doctor in the server container)
 #     --yes           take defaults / PVEWARDEN_* environment variables instead of asking
 #     --dry-run       show what would be done, change nothing
 #     --source        use a local copy of pvewarden instead of downloading the release
@@ -35,7 +36,7 @@ CT_TAG=pvewarden-server
 TAG_UPDATE=pvewarden-update
 TAG_REBOOT=pvewarden-reboot
 
-DRY_RUN=0 YES=0 SOURCE="" COMMAND="" ALLOW_DOWNGRADE=0
+DRY_RUN=0 YES=0 SOURCE="" COMMAND="" ALLOW_DOWNGRADE=0 VERBOSE=0
 WORK=$(mktemp -d)
 CREATED_CT=""  # set once a container exists, so a failed install can say what it left behind
 DIED=0         # die() has said why; any other non-zero exit is a step that failed
@@ -134,12 +135,20 @@ env_or() {
   printf '%s' "${!name:-$2}"
 }
 
+# text_rows TEXT: lines TEXT takes in a 76-column dialog (\n breaks lines, long ones wrap)
+text_rows() {
+  local rows=0 l
+  while IFS= read -r l; do rows=$((rows + ${#l} / 70 + 1)); done < <(printf '%b\n' "$1")
+  echo "$rows"
+}
+
 # ask NAME "question" default  ->  sets $NAME
 ask() {
   local name=$1 question=$2 value
   value=$(env_or "$1" "$3")
   if [ "$YES" = 0 ]; then
-    value=$(whiptail --title "$TITLE" --inputbox "$question" 12 76 "$value" 3>&1 1>&2 2>&3) || die "cancelled"
+    value=$(whiptail --title "$TITLE" --inputbox "$question" $(($(text_rows "$question") + 8)) 76 "$value" 3>&1 1>&2 2>&3) ||
+      die "cancelled"
   fi
   printf -v "$name" '%s' "$value"
 }
@@ -150,7 +159,8 @@ ask_secret() {
   a=$(env_or "$1" "")
   if [ "$YES" = 0 ]; then
     while :; do
-      a=$(whiptail --title "$TITLE" --passwordbox "$question" 10 76 3>&1 1>&2 2>&3) || die "cancelled"
+      a=$(whiptail --title "$TITLE" --passwordbox "$question" $(($(text_rows "$question") + 8)) 76 3>&1 1>&2 2>&3) ||
+        die "cancelled"
       [ -z "$a" ] && break
       b=$(whiptail --title "$TITLE" --passwordbox "Repeat:" 8 76 3>&1 1>&2 2>&3) || die "cancelled"
       [ "$a" = "$b" ] && break
@@ -166,8 +176,9 @@ choose() {
   value=$(env_or "$1" "$3")
   shift 3
   if [ "$YES" = 0 ]; then
-    value=$(whiptail --title "$TITLE" --default-item "$value" --menu "$question" 20 76 10 "$@" 3>&1 1>&2 2>&3) ||
-      die "cancelled"
+    local items=$(($# / 2))
+    value=$(whiptail --title "$TITLE" --default-item "$value" --menu "$question" \
+      $(($(text_rows "$question") + items + 8)) 76 "$items" "$@" 3>&1 1>&2 2>&3) || die "cancelled"
   fi
   printf -v "$name" '%s' "$value"
 }
@@ -189,7 +200,7 @@ json() { perl -MJSON::PP -e "my \$d = decode_json(join '', <STDIN>); $1"; }
 # ============================================================================================
 
 preflight() {
-  [ "$(id -u)" = 0 ] || die "run as root"
+  [ "$(id -u)" = 0 ] || die "run as root (sudo -i first): pct, qm and pvesh need it"
   command -v pveversion >/dev/null || die "this is not a Proxmox VE host"
   PVE_MAJOR=$(pveversion | sed -n 's#^pve-manager/\([0-9]*\)\..*#\1#p')
   [ -n "$PVE_MAJOR" ] && [ "$PVE_MAJOR" -ge 8 ] || die "Proxmox VE 8 or newer is required"
@@ -313,7 +324,7 @@ ask_container() {
     choose ONBOOT "Start the container when the host boots?" 1 1 "Yes" 0 "No"
   fi
 
-  ask_secret ROOT_PASSWORD "Root password for the container (min. 5 characters).\nEmpty = no password: use SSH keys or 'pct enter $CTID'."
+  ask_secret ROOT_PASSWORD "Root password for the container (min. 5 characters).\n\nIt works on the console only: Proxmox UI -> container -> Console, or 'pct enter $CTID' on this host. Debian refuses root passwords over SSH; for SSH, add a key in the next step.\n\nEmpty = no password."
   if [ -n "$ROOT_PASSWORD" ] && [ ${#ROOT_PASSWORD} -lt 5 ]; then die "the password must have at least 5 characters"; fi
   if [ "$YES" = 1 ]; then collect_ssh_keys "$(env_or SSH_KEYS "")"; else ssh_keys_dialog; fi
 
@@ -399,12 +410,12 @@ ssh_keys_dialog() {
     [ -n "$host_keys" ] && items+=(host "Keys that may log in to this Proxmox host as root")
     items+=(file "A file with public keys on this host" url "Another https:// address with keys")
     if [ "$SSH_KEYS_COUNT" = 0 ]; then
-      items+=("done" "Continue without SSH keys (log in with the password or 'pct enter')")
+      items+=("done" "Continue without SSH keys (console and 'pct enter' only)")
     else
       items+=("done" "Done: use these $SSH_KEYS_COUNT key(s)")
     fi
     choice=$(whiptail --title "$TITLE" --default-item "$default" --menu \
-      "Who may log in to the container as root over SSH?\n\n$status\n\nAdd keys from:" 22 82 8 \
+      "Who may log in to the container as root over SSH? Only keys work: Debian refuses root passwords over SSH.\n\n$status\n\nAdd keys from:" 22 82 8 \
       "${items[@]}" 3>&1 1>&2 2>&3) || die "cancelled"
     case "$choice" in
       done) return 0 ;;
@@ -434,13 +445,13 @@ ssh_keys_dialog() {
 }
 
 ask_access() {
-  choose ACCESS "How will agents reach the pvewarden server?" https \
-    https "HTTPS on the container's address (certificate signed by the Proxmox CA)" \
-    custom "My own address, e.g. a WireGuard/VPN IP I configure in the container myself"
+  choose ACCESS "How will agents reach the pvewarden server?\n\nThe container reaches the guests from its LAN address (the IP above) either way. Agents reach it on that address, or through a VPN that runs inside the container." https \
+    https "On the container's LAN address, over HTTPS (recommended)" \
+    custom "Through a VPN inside the container, e.g. WireGuard (set up after the install)"
   if [ "$ACCESS" = custom ]; then
-    ask LISTEN "Address the server listens on (it must exist in the container before the server starts):" ""
+    ask LISTEN "The container's address in the VPN, e.g. 10.200.0.200. The server listens only there.\n\nYou bring the VPN up in the container after the install (docs/wireguard.md). Until the address exists the server waits; it starts by itself within 10 s once it does." ""
     [ -n "$LISTEN" ] || die "an address is required"
-    choose USE_TLS "Use HTTPS on that address too? (not needed inside an encrypted VPN)" no no "No, plain HTTP" yes "Yes, certificate signed by the Proxmox CA"
+    choose USE_TLS "HTTPS on that address too?\n\nNot needed when the VPN ends in this container: WireGuard encrypts the whole way from the agent to the server." no no "No, plain HTTP inside the VPN" yes "Yes, certificate signed by the Proxmox CA"
   else
     LISTEN="" USE_TLS=yes
   fi
@@ -455,7 +466,7 @@ Container
   disk / cores / RAM   ${DISK} GB on $ROOTFS_STORAGE / $CORES / $MEMORY MB (+$SWAP MB swap)
   network              $BRIDGE${VLAN:+ vlan $VLAN}, IPv4 $IP${GW:+ via $GW}${IP6:+, IPv6 $IP6}
   DNS                  ${NAMESERVER:-as host}${SEARCHDOMAIN:+, search $SEARCHDOMAIN}
-  root password        $([ -n "$ROOT_PASSWORD" ] && echo set || echo none)
+  root password        $([ -n "$ROOT_PASSWORD" ] && echo "set (console and 'pct enter' only, not SSH)" || echo none)
   SSH keys             $(ssh_keys_summary)
   start on boot        $([ "$ONBOOT" = 1 ] && echo yes || echo no)
 Server
@@ -743,13 +754,20 @@ tls_kind() {
 }
 
 
-SETUP_PROBLEMS=""
+SETUP_PROBLEMS="" LISTEN_MISSING=0
+# listen_exists: the address the server listens on is configured in the container (a VPN may not be up yet)
+listen_exists() { pct exec "$CTID" -- ip -o addr show 2>/dev/null | grep -qF -e "inet $LISTEN/" -e "inet6 $LISTEN/"; }
+
 start_server() {
   info "starting the pvewarden service"
   slow pct exec "$CTID" -- systemctl restart pvewarden
   info "checking the setup (pvewarden doctor)"
   slow pct exec "$CTID" -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor || SETUP_PROBLEMS="doctor reported failures (see above)"
   [ "$DRY_RUN" = 1 ] && return 0
+  if ! listen_exists; then
+    LISTEN_MISSING=1 # expected with a VPN set up after the install: the service retries every 10 s
+    return 0
+  fi
   sleep 2
   if ! pct exec "$CTID" -- systemctl is-active --quiet pvewarden; then
     SETUP_PROBLEMS="${SETUP_PROBLEMS:+$SETUP_PROBLEMS; }the service is not running (pct exec $CTID -- journalctl -u pvewarden -n 30)"
@@ -847,7 +865,12 @@ final_message() {
     banner "${C_BAD}pvewarden is installed, but NOT working yet${C_OFF}"
     echo
     field "Problem" "$SETUP_PROBLEMS"
-    field "Then" "pct exec $CTID -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor"
+    field "Then" "pvewarden-setup doctor"
+  elif [ "$LISTEN_MISSING" = 1 ]; then
+    banner "${C_KEY}pvewarden is installed; it starts once $LISTEN exists${C_OFF}"
+    echo
+    field "Next" "bring up $LISTEN in container $CTID (WireGuard: docs/wireguard.md)"
+    field "Then" "pvewarden-setup doctor (the server starts by itself within 10 s)"
   else
     banner "${C_OK}pvewarden is ready${C_OFF}"
   fi
@@ -899,20 +922,44 @@ do_install() {
 do_enroll() {
   load_state
   [ -x "$SBIN/pvewarden-enroll" ] || [ "$DRY_RUN" = 1 ] || die "pvewarden is not installed (run install first)"
-  local items=() vmid name type status chosen level tags
-  while IFS=$'\t' read -r vmid name type status; do
+  local items=() vmid name type status node chosen level tags no_agent="" no_agent_ids=" " id msg
+  while IFS=$'\t' read -r vmid name type status node; do
     [ "$vmid" = "$CTID" ] && continue # never the server itself
+    # enrolling a VM goes through its guest agent: offer only VMs whose agent answers
+    if [ "$type" = qemu ] && [ "$status" = running ] &&
+      ! timeout 10 pvesh create "/nodes/${node:-$NODE}/qemu/$vmid/agent/ping" >/dev/null 2>&1; then
+      no_agent+="  $vmid $name\\n" # whiptail turns \n into a line break
+      no_agent_ids+="$vmid "
+      continue
+    fi
     items+=("$vmid" "$name ($type, $status)" OFF)
   done < <(pvesh get /cluster/resources --type vm --output-format json |
-    json 'printf "%s\t%s\t%s\t%s\n", $_->{vmid}, $_->{name} // "", $_->{type}, $_->{status} for sort { $a->{vmid} <=> $b->{vmid} } grep { !$_->{template} } @$d')
+    json 'printf "%s\t%s\t%s\t%s\t%s\n", $_->{vmid}, $_->{name} // "", $_->{type}, $_->{status}, $_->{node} // "" for sort { $a->{vmid} <=> $b->{vmid} } grep { !$_->{template} } @$d')
 
+  local agent_help="${no_agent}\nEnrolling a VM needs its QEMU guest agent. To add one: in the VM, apt install qemu-guest-agent; on the Proxmox host, qm set <vmid> --agent enabled=1; then shut the VM down and start it again (a reboot from inside is not enough). Then run pvewarden-setup enroll again."
   if [ "$YES" = 1 ]; then
-    chosen=$(env_or ENROLL "")
+    chosen=""
+    for id in $(env_or ENROLL ""); do
+      if [[ $no_agent_ids == *" $id "* ]]; then
+        echo "skipping VM $id: its QEMU guest agent does not answer (see: pvewarden-setup enroll, or docs/install.md)" >&2
+      else
+        chosen+="$id"$'\n'
+      fi
+    done
   else
+    if [ -n "$no_agent" ]; then
+      msg="Not offered: these VMs have no working QEMU guest agent.\n\n$agent_help"
+      whiptail --title "$TITLE" --msgbox "$msg" $(($(text_rows "$msg") + 7)) 76
+    fi
+    [ ${#items[@]} -gt 0 ] || {
+      echo "no guests to enroll"
+      return 0
+    }
     chosen=$(whiptail --title "$TITLE" --separate-output --checklist \
-      "Guests to manage (running Ubuntu/Debian; VMs need the qemu-guest-agent):" 22 76 14 "${items[@]}" 3>&1 1>&2 2>&3) ||
+      "Guests to manage (running Ubuntu/Debian):" 22 76 14 "${items[@]}" 3>&1 1>&2 2>&3) ||
       die "cancelled"
   fi
+  chosen=$(printf '%s\n' "$chosen" | grep -v '^$' || true)
   [ -n "$chosen" ] || {
     echo "no guests selected"
     return 0
@@ -929,7 +976,7 @@ do_enroll() {
     reboot) tags="$TAG_UPDATE,$TAG_REBOOT" ;;
     *) die "unknown level $level" ;;
   esac
-  choose AUTO_UPDATES "Automatic updates on the selected guests?\n\nA guest's own unattended-upgrades can install updates every day by itself, without a pvewarden snapshot (Ubuntu does it by default; Debian once unattended-upgrades is installed, which pvewarden needs). The client reports the result for each guest." keep \
+  choose AUTO_UPDATES "Automatic updates on the selected guests?\n\nA guest's own unattended-upgrades can install updates every day by itself, without a pvewarden snapshot (Ubuntu does it by default; Debian once unattended-upgrades is installed, which pvewarden needs).\n\nOn: security fixes arrive the same day, but with no snapshot to roll back to. Off: updates come only through pvewarden, always after a snapshot." keep \
     keep "Keep each guest's current setting" \
     off "Turn off: only pvewarden installs updates, with snapshots" \
     on "Turn on: guests also update themselves daily"
@@ -1185,18 +1232,32 @@ do_connect() {
   line '='
 }
 
+# ============================================================================================
+# doctor: the server's self-check, run from this host
+# ============================================================================================
+
+do_doctor() {
+  load_state
+  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+  local args=(doctor)
+  [ "$VERBOSE" = 1 ] && args+=(-v)
+  # read-only, so it also runs with --dry-run
+  pct exec "$CTID" -- runuser -u pvewarden -- /usr/local/bin/pvewarden "${args[@]}"
+}
+
 usage() {
-  sed -n '3,7s/^#  \{0,1\}//p' "$0"
+  sed -n '3,8s/^#  \{0,1\}//p' "$0"
   exit 2
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    install | upgrade | enroll | connect | token | uninstall) COMMAND=$1 ;;
+    install | upgrade | enroll | connect | token | doctor | uninstall) COMMAND=$1 ;;
     renew-cert) COMMAND=renew_cert ;;
     --yes | -y) YES=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --allow-downgrade) ALLOW_DOWNGRADE=1 ;;
+    -v | --verbose) VERBOSE=1 ;;
     --source)
       SOURCE=${2:?--source needs a path}
       shift
@@ -1219,6 +1280,7 @@ if [ -z "$COMMAND" ]; then
     connect "Show how to connect an agent" \
     token "Give an agent a new token (the old one stops working)" \
     renew_cert "New TLS certificate (e.g. after the server's address changed)" \
+    doctor "Check the installation and every guest" \
     uninstall "Remove pvewarden"
 fi
 "do_$COMMAND"

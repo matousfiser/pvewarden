@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Clearer install, from the first production install:
+
+- The root password of the server container is described as what it is: console and `pct enter`
+  only. Debian refuses root passwords over SSH; the wizard now says so and points to SSH keys.
+- Reaching the server through a VPN: the wizard explains the two addresses (LAN for the guests, VPN
+  for the agents). A VPN address that is not up yet at the end of the install is the next step, not
+  a failure: the summary says what to do, and the server starts by itself within 10 s once the
+  address exists. New guide: docs/wireguard.md (also in Czech).
+- Enrolling: VMs whose QEMU guest agent does not answer are no longer offered (and skipped with
+  `--yes`); the wizard lists them with the steps to add the agent, including the power cycle.
+- New `pvewarden-setup doctor [-v]`: the server's self-check from the host, without `runuser` and
+  full paths. "run as root" now says `sudo -i`.
+- Automatic updates: the wizard says what on and off mean; doctor lists the guests where they are
+  on as one `[INFO]` line with how to turn them off, instead of a note on every guest.
+- Docs: checking the downloaded script is optional (pvewarden-setup checks what it downloads);
+  the upgrade steps no longer require it.
+
 ## 0.1.4 (2026-11-02)
 
 - Fix: `pvewarden-setup upgrade` installed the version recorded in `/etc/pvewarden/setup.conf`
