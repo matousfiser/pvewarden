@@ -42,26 +42,13 @@ class BearerAuth:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         if self.ca_pem is not None and scope["path"] == "/ca.pem" and scope["method"] in ("GET", "HEAD"):
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [(b"content-type", b"application/x-pem-file")],
-                }
-            )
-            return await send({"type": "http.response.body", "body": b"" if scope["method"] == "HEAD" else self.ca_pem})
+            body = b"" if scope["method"] == "HEAD" else self.ca_pem
+            return await self.plain(send, 200, body, b"application/x-pem-file")
         ip = (scope.get("client") or ("?",))[0]
         client = self.client_for(scope["headers"])
         if client is None:
             self.denied.denied(ip, scope["path"])
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"text/plain"), (b"www-authenticate", b"Bearer")],
-                }
-            )
-            return await send({"type": "http.response.body", "body": b"unauthorized"})
+            return await self.plain(send, 401, b"unauthorized", extra=[(b"www-authenticate", b"Bearer")])
 
         self.denied.flush()
         length = dict(scope["headers"]).get(b"content-length", b"0")
@@ -82,8 +69,9 @@ class BearerAuth:
         await self.app(scope, limited, send)
 
     @staticmethod
-    async def plain(send, status: int, body: bytes) -> None:
-        await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"text/plain")]})
+    async def plain(send, status: int, body: bytes, content_type: bytes = b"text/plain", extra=()) -> None:
+        headers = [(b"content-type", content_type), *extra]
+        await send({"type": "http.response.start", "status": status, "headers": headers})
         await send({"type": "http.response.body", "body": body})
 
 

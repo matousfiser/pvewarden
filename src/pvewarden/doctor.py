@@ -113,21 +113,21 @@ def check_local(app: App) -> list[Result]:
     return out
 
 
+TLS_HINT = (
+    "TLS verification failed: point verify_tls to the Proxmox CA (/etc/pve/pve-root-ca.pem) and use "
+    "a host name that is in the certificate (map it in /etc/hosts if needed)"
+)
+
+
 def explain_proxmox_error(e: Exception) -> str:
     text = str(e)
     cause = e.__cause__
     while cause is not None:
         if isinstance(cause, ssl.SSLCertVerificationError):
-            return (
-                "TLS verification failed: point verify_tls to the Proxmox CA (/etc/pve/pve-root-ca.pem) and use "
-                "a host name that is in the certificate (map it in /etc/hosts if needed)"
-            )
+            return TLS_HINT
         cause = cause.__cause__ or cause.__context__
     if "CERTIFICATE_VERIFY_FAILED" in text or "hostname mismatch" in text.lower():
-        return (
-            "TLS verification failed: point verify_tls to the Proxmox CA (/etc/pve/pve-root-ca.pem) and use "
-            "a host name that is in the certificate (map it in /etc/hosts if needed)"
-        )
+        return TLS_HINT
     if "401" in text:
         return "authentication failed: check token_id and token_secret"
     if "ConnectError" in text or "refused" in text or "timed out" in text.lower():

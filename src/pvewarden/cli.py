@@ -4,7 +4,7 @@ import os
 import sys
 
 from pvewarden import __version__
-from pvewarden.config import DEFAULT_CONFIG_PATH, ConfigError, load, set_client_token
+from pvewarden.config import DEFAULT_CONFIG_PATH, ConfigError, enable_tls, load, set_client_token
 from pvewarden.errors import WardenError
 from pvewarden.keys import KeyStoreError
 
@@ -14,7 +14,6 @@ def serve(args: argparse.Namespace) -> None:
     from pvewarden.tools import create_server
 
     cfg = load(args.config)
-    logging.getLogger("httpx").setLevel(logging.WARNING)  # no per-request API noise
     app = App(cfg)
     server = create_server(app)
     if not args.http:
@@ -52,7 +51,6 @@ def doctor(args: argparse.Namespace) -> None:
     from pvewarden.app import App
     from pvewarden.doctor import ok, render, run_checks
 
-    logging.getLogger("httpx").setLevel(logging.WARNING)
     cfg = load(args.config)
     results = [ok("Config", str(args.config)), *asyncio.run(run_checks(App(cfg)))]
     print(render(results, verbose=args.verbose))
@@ -68,6 +66,13 @@ def token(args: argparse.Namespace) -> None:
         "the server restarts (systemctl restart pvewarden)",
         file=sys.stderr,
     )
+
+
+def config(args: argparse.Namespace) -> None:
+    """Changes to the config file that pvewarden-setup makes; each is validated before it is written."""
+    if args.action == "enable-tls":
+        changed = enable_tls(args.config)
+        print(f"{args.config}: HTTPS {'turned on' if changed else 'was already on'}", file=sys.stderr)
 
 
 def key(args: argparse.Namespace) -> None:
@@ -134,8 +139,6 @@ def verify_new_key(cfg, vmid: int) -> int:
     from pvewarden.app import App
     from pvewarden.errors import WardenError
 
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-
     async def check() -> int:
         app = App(cfg)
         try:
@@ -173,6 +176,9 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("token", help="give an HTTP client a new random token (rotation) and print it")
     p.add_argument("name", nargs="?", default="agent", help="client name in [http.clients] (default: agent)")
     p.set_defaults(func=token)
+    p = sub.add_parser("config", help="change the config file (used by pvewarden-setup)")
+    p.add_argument("action", choices=["enable-tls"], help="enable-tls: serve HTTPS with tls.crt/tls.key/tls-ca.pem")
+    p.set_defaults(func=config)
     p = sub.add_parser("key", help="per-guest SSH keys (used by pvewarden-enroll)")
     p.add_argument("action", choices=["new", "verify", "activate", "remove", "list"])
     p.add_argument("vmid", type=int, nargs="?")
@@ -183,6 +189,7 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=pending)
 
     args = parser.parse_args(argv)
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # no per-request Proxmox API noise
     try:
         args.func(args)
     except ConfigError as e:

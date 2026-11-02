@@ -232,6 +232,24 @@ save_state() {
   fi
 }
 
+# require_installed: load the state of an existing install, or stop
+require_installed() {
+  load_state
+  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+}
+
+# mcp_url SCHEME [HOST]: the address agents connect to
+mcp_url() { echo "$1://${2:-$LISTEN}:8765/mcp"; }
+
+# the pvewarden command in the container, as the service user (pct exec has no /usr/local/bin in PATH)
+SERVICE_CLI=(runuser -u pvewarden -- /usr/local/bin/pvewarden)
+
+# valid_client_name NAME: an agent's name in [http.clients] (a bare TOML key, shown in the audit log)
+valid_client_name() {
+  case "$1" in "" | *[!A-Za-z0-9_-]*) die "an agent name may contain only letters, digits, '-' and '_': '$1'" ;; esac
+  [ ${#1} -le 64 ] || die "an agent name may have at most 64 characters"
+}
+
 storages_for() { pvesm status --content "$1" 2>/dev/null | awk 'NR > 1 && $3 == "active" {print $1, $2}'; }
 bridges() {
   local d
@@ -447,15 +465,16 @@ ssh_keys_dialog() {
 ask_access() {
   choose ACCESS "How will agents reach the pvewarden server?\n\nThe container reaches the guests from its LAN address (the IP above) either way. Agents reach it on that address, or through a VPN that runs inside the container." https \
     https "On the container's LAN address, over HTTPS (recommended)" \
-    custom "Through a VPN inside the container, e.g. WireGuard (set up after the install)"
+    custom "Through a VPN inside the container (set up after the install)"
   if [ "$ACCESS" = custom ]; then
-    ask LISTEN "The container's address in the VPN, e.g. 10.200.0.200. The server listens only there.\n\nYou bring the VPN up in the container after the install (docs/wireguard.md). Until the address exists the server waits; it starts by itself within 10 s once it does." ""
+    ask LISTEN "The container's address in the VPN, e.g. 10.200.0.200. The server listens only there.\n\nYou bring the VPN up in the container after the install (docs/vpn.md). Until the address exists the server waits; it starts by itself within 10 s once it does." ""
     [ -n "$LISTEN" ] || die "an address is required"
-    choose USE_TLS "HTTPS on that address too?\n\nRecommended: some MCP clients refuse a remote server over plain HTTP. For the encryption alone it is not needed when the VPN ends in this container, as WireGuard encrypts the whole way from the agent." yes yes "Yes, certificate signed by the Proxmox CA" no "No, plain HTTP inside the VPN"
+    choose USE_TLS "HTTPS on that address too?\n\nRecommended: some MCP clients refuse a remote server over plain HTTP, whatever the network." yes yes "Yes, certificate signed by the Proxmox CA" no "No, plain HTTP inside the VPN"
   else
     LISTEN="" USE_TLS=yes
   fi
-  ask AGENT_NAME "Name of the first agent (shown in the audit log):" agent
+  ask AGENT_NAME "Name of the first agent (shown in the audit log; letters, digits, '-' and '_'):" agent
+  valid_client_name "$AGENT_NAME"
 }
 
 summary() {
@@ -470,7 +489,7 @@ Container
   SSH keys             $(ssh_keys_summary)
   start on boot        $([ "$ONBOOT" = 1 ] && echo yes || echo no)
 Server
-  agents connect via   $([ "$USE_TLS" = yes ] && echo https || echo http)://${LISTEN:-<container IP>}:8765/mcp
+  agents connect via   $(mcp_url "$([ "$USE_TLS" = yes ] && echo https || echo http)" "${LISTEN:-<container IP>}")
 Proxmox
   pool $POOL, role $ROLE ($PRIVS)
   user $PVE_USER, token $TOKEN_NAME granted only on /pool/$POOL
@@ -543,25 +562,6 @@ mark_owned() {
   if [ "$DRY_RUN" = 1 ]; then echo "would record in $OWNED: $1"; return 0; fi
   mkdir -p "$ETC"
   echo "$1=1" >> "$OWNED"
-}
-# legacy_ownership: installs before 0.1.2 did not record whether they created the pool, role and
-# user or took over existing ones without asking. Only the admin knows: record them as ours only
-# when told (uninstall deletes what is recorded), and remember the answer.
-legacy_ownership() {
-  local adopt=no
-  if [ "$YES" = 1 ]; then
-    adopt=$(env_or ADOPT_EXISTING no)
-  elif whiptail --title "$TITLE" --defaultno --yesno "pvewarden 0.1.1 and older did not record whether they created pool $POOL, role $ROLE and user $PVE_USER, or took over ones that already existed.\n\nDid pvewarden-setup create all three? Say yes only if none of them existed before you installed pvewarden: 'uninstall' will then delete them.\n\nNo (or unsure) = 'uninstall' leaves them and tells you how to remove them." 16 90; then
-    adopt=yes
-  fi
-  if [ "$DRY_RUN" = 1 ]; then echo "would record in $OWNED: install before 0.1.2, created by pvewarden-setup: $adopt"; return 0; fi
-  mkdir -p "$ETC"
-  echo "# install before 0.1.2; the admin said pvewarden-setup created the pool, role and user: $adopt" > "$OWNED"
-  if [ "$adopt" = yes ]; then
-    mark_owned POOL
-    mark_owned ROLE
-    mark_owned USER
-  fi
 }
 pool_exists() { pvesh get "/pools/$POOL" >/dev/null 2>&1; }
 role_exists() { pveum role list --output-format json | json 'exit !grep { $_->{roleid} eq "'"$ROLE"'" } @$d'; }
@@ -643,13 +643,19 @@ ct_push() { # ct_push LOCALFILE REMOTEPATH MODE
   run pct push "$CTID" "$1" "$2" --perms "$3"
 }
 
-install_server() {
-  info "installing the server in container $CTID (apt and pip: usually a few minutes)"
+# install_server_code: copy the source into the container and run its installer (install and upgrade)
+install_server_code() {
+  run pct exec "$CTID" -- rm -rf /root/pvewarden-src
   run pct exec "$CTID" -- mkdir -p /root/pvewarden-src
   ct_push "$SRC_TAR" /root/pvewarden-src.tar.gz 0600
   run pct exec "$CTID" -- tar -C /root/pvewarden-src -xzf /root/pvewarden-src.tar.gz
-  slow pct exec "$CTID" -- bash /root/pvewarden-src/deploy/install-server.sh "${LISTEN:-$CT_IP}"
+  slow pct exec "$CTID" -- bash /root/pvewarden-src/deploy/install-server.sh "$LISTEN"
+}
+
+install_server() {
+  info "installing the server in container $CTID (apt and pip: usually a few minutes)"
   [ -n "$LISTEN" ] || LISTEN=$CT_IP
+  install_server_code
 }
 
 write_server_config() {
@@ -666,8 +672,9 @@ write_server_config() {
 tls_key = \"$CT_ETC/tls.key\"
 tls_ca = \"$CT_ETC/tls-ca.pem\""
   fi
-  umask 077
-  cat > "$WORK/config.toml" <<EOF
+  (
+    umask 077 # the token secret: never readable by others, not even for a moment
+    cat > "$WORK/config.toml" <<EOF
 # written by pvewarden-setup $VERSION
 state_dir = "/var/lib/pvewarden"
 
@@ -695,6 +702,7 @@ $tls_lines
 [http.clients]
 $AGENT_NAME = "$agent_token"
 EOF
+  )
   info "writing the server configuration (token secret goes only into the container)"
   ct_push "$WORK/config.toml" "$CT_ETC/config.toml" 0640
   rm -f "$WORK/config.toml"
@@ -738,12 +746,7 @@ issue_tls_cert() {
   run pct exec "$CTID" -- sh -c "chown root:pvewarden $CT_ETC/tls.key && chmod 0640 $CT_ETC/tls.key && chmod 0644 $CT_ETC/tls.crt"
   # self-signed: the certificate is its own CA
   [ -r "$PVE_CA_KEY" ] || [ "$DRY_RUN" = 1 ] || pct exec "$CTID" -- install -m 0644 "$CT_ETC/tls.crt" "$CT_ETC/tls-ca.pem"
-  # installs from before tls_ca: add it, so the server offers /ca.pem
-  run pct exec "$CTID" -- sh -c "grep -q '^tls_ca' $CT_ETC/config.toml || sed -i '/^tls_key/a tls_ca = \"$CT_ETC/tls-ca.pem\"' $CT_ETC/config.toml"
 }
-
-# turns HTTPS on in the server config of an install made with plain HTTP (issue_tls_cert adds tls_ca)
-TLS_CONFIG_SED='/^\[http\]$/a tls_cert = "/etc/pvewarden/tls.crt"\ntls_key = "/etc/pvewarden/tls.key"'
 
 # tls_kind: how the installed server is reached: http, pve-ca or self-signed
 tls_kind() {
@@ -756,16 +759,23 @@ tls_kind() {
   fi
 }
 
+# installed_scheme: http or https, as the installed server is reached
+installed_scheme() { if [ "$(tls_kind)" = http ]; then echo http; else echo https; fi; }
+
+# restart_server: (re)start the service, e.g. after its code, config or certificate changed
+restart_server() {
+  info "restarting the pvewarden service"
+  slow pct exec "$CTID" -- systemctl restart pvewarden
+}
 
 SETUP_PROBLEMS="" LISTEN_MISSING=0
 # listen_exists: the address the server listens on is configured in the container (a VPN may not be up yet)
 listen_exists() { pct exec "$CTID" -- ip -o addr show 2>/dev/null | grep -qF -e "inet $LISTEN/" -e "inet6 $LISTEN/"; }
 
 start_server() {
-  info "starting the pvewarden service"
-  slow pct exec "$CTID" -- systemctl restart pvewarden
+  restart_server
   info "checking the setup (pvewarden doctor)"
-  slow pct exec "$CTID" -- runuser -u pvewarden -- /usr/local/bin/pvewarden doctor || SETUP_PROBLEMS="doctor reported failures (see above)"
+  slow pct exec "$CTID" -- "${SERVICE_CLI[@]}" doctor || SETUP_PROBLEMS="doctor reported failures (see above)"
   [ "$DRY_RUN" = 1 ] && return 0
   if ! listen_exists; then
     LISTEN_MISSING=1 # expected with a VPN set up after the install: the service retries every 10 s
@@ -777,11 +787,17 @@ start_server() {
   fi
 }
 
+# install_enroll_tool [upgrade]: the enroll tool and guest scripts on this host. An upgrade only
+# replaces the files: the links in $SBIN exist, and enroll.conf stays as it is (FROM may be set by hand)
 install_enroll_tool() {
   info "installing pvewarden-enroll on this host"
   run mkdir -p "$HOST_DIR" "$ETC"
   run rm -rf "$HOST_DIR/guest" "$HOST_DIR/proxmox"
   run cp -r "$WORK/src/guest" "$WORK/src/proxmox" "$HOST_DIR/"
+  if [ "${1:-}" = upgrade ]; then
+    [ -f "$ETC/enroll.conf" ] || write_enroll_conf
+    return 0
+  fi
   run ln -sf "$HOST_DIR/proxmox/pvewarden-enroll" "$SBIN/pvewarden-enroll"
   run ln -sf "$HOST_DIR/proxmox/pvewarden-setup" "$SBIN/pvewarden-setup"
   write_enroll_conf
@@ -856,9 +872,8 @@ guests_line() {
 }
 
 final_message() {
-  local scheme url
-  scheme=$([ "$USE_TLS" = yes ] && echo https || echo http)
-  url="$scheme://$LISTEN:8765/mcp"
+  local url
+  url=$(mcp_url "$([ "$USE_TLS" = yes ] && echo https || echo http)")
   if [ "$DRY_RUN" = 1 ]; then
     printf '\nDry run finished: nothing was changed. The real install ends with the MCP endpoint\n'
     printf '(%s) and a one-time agent token.\n' "$url"
@@ -872,7 +887,7 @@ final_message() {
   elif [ "$LISTEN_MISSING" = 1 ]; then
     banner "${C_KEY}pvewarden is installed; it starts once $LISTEN exists${C_OFF}"
     echo
-    field "Next" "bring up $LISTEN in container $CTID (WireGuard: docs/wireguard.md)"
+    field "Next" "bring up $LISTEN in container $CTID (docs/vpn.md)"
     field "Then" "pvewarden-setup doctor (the server starts by itself within 10 s)"
   else
     banner "${C_OK}pvewarden is ready${C_OFF}"
@@ -1051,59 +1066,24 @@ refuse_downgrade() {
 }
 
 do_upgrade() {
-  load_state
-  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+  require_installed
   use_newest_setup
   fetch_source
   refuse_downgrade
   confirm "Upgrade pvewarden in container $CTID and the tools on this host to $VERSION?" || die "cancelled"
   info "upgrading the server in container $CTID"
-  run pct exec "$CTID" -- rm -rf /root/pvewarden-src
-  run pct exec "$CTID" -- mkdir -p /root/pvewarden-src
-  ct_push "$SRC_TAR" /root/pvewarden-src.tar.gz 0600
-  run pct exec "$CTID" -- tar -C /root/pvewarden-src -xzf /root/pvewarden-src.tar.gz
-  slow pct exec "$CTID" -- bash /root/pvewarden-src/deploy/install-server.sh "$LISTEN"
-  info "restarting the pvewarden service"
-  slow pct exec "$CTID" -- systemctl restart pvewarden
+  install_server_code
+  restart_server
   CT_IP=${CT_IP:-$LISTEN}
-  [ -f "$OWNED" ] || legacy_ownership
-  install_enroll_tool_keep_conf
+  install_enroll_tool upgrade
   save_state
-  if confirm "Enroll every guest in pool $POOL again (pvewarden-enroll --all)?\n\nThis updates the client on the guests and gives each guest its own SSH key. Since 0.1.2 the server refuses guests that have no key of their own, so say yes unless you will run pvewarden-enroll yourself."; then
-    if run "$SBIN/pvewarden-enroll" --all; then
-      remove_shared_key
-    else
-      echo "some guests were not switched: the server refuses them until they are enrolled again (pvewarden-enroll <vmid>)"
-    fi
+  if confirm "Update the pvewarden client on every guest in pool $POOL too (pvewarden-enroll --all)?\n\nGuests keep their permissions and automatic-updates setting; each gets a fresh SSH key. Without it they keep running the client of the previous version."; then
+    run "$SBIN/pvewarden-enroll" --all ||
+      echo "some guests were not updated; enroll them again later: pvewarden-enroll <vmid>"
   else
-    echo "guests are refused until they are enrolled again: pvewarden-enroll --all"
+    echo "the guests still run the previous client; update it any time: pvewarden-enroll --all"
   fi
   start_server
-}
-
-install_enroll_tool_keep_conf() {
-  run rm -rf "$HOST_DIR/guest" "$HOST_DIR/proxmox"
-  run mkdir -p "$HOST_DIR"
-  run cp -r "$WORK/src/guest" "$WORK/src/proxmox" "$HOST_DIR/"
-  # before 0.1.2: a shared key (PUBKEY) instead of the server (SERVER_CT); keep FROM and POOL as set
-  if [ -f "$ETC/enroll.conf" ] && ! grep -q '^SERVER_CT=' "$ETC/enroll.conf"; then
-    if [ "$DRY_RUN" = 1 ]; then
-      echo "would add SERVER_CT=$CTID to $ETC/enroll.conf and drop PUBKEY"
-    else
-      sed -i '/^PUBKEY=/d' "$ETC/enroll.conf"
-      printf 'SERVER_CT=%q\n' "$CTID" >> "$ETC/enroll.conf"
-    fi
-  elif [ ! -f "$ETC/enroll.conf" ]; then
-    write_enroll_conf
-  fi
-}
-
-# remove_shared_key: once every guest has its own key, the old shared key (before 0.1.2) is unused
-remove_shared_key() {
-  pct exec "$CTID" -- test -f "$CT_ETC/id_ed25519" 2>/dev/null || [ "$DRY_RUN" = 1 ] || return 0
-  info "every guest has its own key now: removing the old shared SSH key from the server"
-  run pct exec "$CTID" -- sed -i '/^key = /d' "$CT_ETC/config.toml"
-  run pct exec "$CTID" -- rm -f "$CT_ETC/id_ed25519" "$CT_ETC/id_ed25519.pub"
 }
 
 do_uninstall() {
@@ -1139,11 +1119,13 @@ do_uninstall() {
     run pveum pool delete "$POOL"
   fi
   if [ -n "$CTID" ] && pct status "$CTID" >/dev/null 2>&1; then
-    if [ "$YES" = 0 ] && whiptail --title "$TITLE" --defaultno --yesno "Also destroy container $CTID (the server, its audit log and keys)?" 10 76; then
-      info "stopping and destroying container $CTID"
-      slow pct stop "$CTID" || true
-      slow pct destroy "$CTID" --purge 1
-    elif [ "$(env_or DESTROY_CT no)" = yes ]; then
+    local destroy
+    destroy=$(env_or DESTROY_CT no)
+    if [ "$YES" = 0 ]; then
+      destroy=no
+      whiptail --title "$TITLE" --defaultno --yesno "Also destroy container $CTID (the server, its audit log and keys)?" 10 76 && destroy=yes
+    fi
+    if [ "$destroy" = yes ]; then
       info "stopping and destroying container $CTID"
       slow pct stop "$CTID" || true
       slow pct destroy "$CTID" --purge 1
@@ -1157,19 +1139,16 @@ do_uninstall() {
 }
 
 # ============================================================================================
-
-# ============================================================================================
 # token: rotate an agent's token
 # ============================================================================================
 
 do_token() {
-  load_state
-  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+  require_installed
   local client token
   ask CLIENT "Which agent gets a new token? (client name in the server config)" agent
   # shellcheck disable=SC2153  # set by ask
   client=$CLIENT
-  case "$client" in "" | *[!A-Za-z0-9_-]*) die "client name may contain letters, digits, '-' and '_'" ;; esac
+  valid_client_name "$client"
   confirm "Give '$client' a new token?\n\nThe old token stops working immediately: update it in every MCP client that uses it." ||
     die "cancelled"
   if [ "$DRY_RUN" = 1 ]; then
@@ -1181,11 +1160,9 @@ do_token() {
   info "generating a new token in container $CTID"
   token=$(slow pct exec "$CTID" -- /usr/local/bin/pvewarden token "$client" 2>/dev/null) ||
     die "could not set the token (is pvewarden in container $CTID up to date? run: pvewarden-setup upgrade)"
-  info "restarting the pvewarden service"
-  slow pct exec "$CTID" -- systemctl restart pvewarden
-  local url kind
-  kind=$(tls_kind)
-  url="$([ "$kind" = http ] && echo http || echo https)://$LISTEN:8765/mcp"
+  restart_server
+  local url
+  url=$(mcp_url "$(installed_scheme)")
   banner "${C_OK}New token for '$client'${C_OFF}"
   echo
   connection_fields "$url" "$token"
@@ -1206,8 +1183,7 @@ do_token() {
 # ============================================================================================
 
 do_renew_cert() {
-  load_state
-  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+  require_installed
   pct exec "$CTID" -- test -f "$CT_ETC/tls.crt" || {
     enable_https
     return
@@ -1215,8 +1191,7 @@ do_renew_cert() {
   confirm "Issue a new TLS certificate for $LISTEN, signed by the Proxmox CA?\n\nClients that trust the Proxmox CA (pve-root-ca.pem) need nothing new. Clients that trusted the old self-signed certificate must switch to the Proxmox CA." ||
     die "cancelled"
   issue_tls_cert
-  info "restarting the pvewarden service"
-  slow pct exec "$CTID" -- systemctl restart pvewarden
+  restart_server
   [ "$DRY_RUN" = 1 ] && return 0
   printf '\nNew certificate for %s (%s).\n' "$LISTEN" "$(tls_kind)"
   echo "Computers that already trust the Proxmox CA need nothing new. Others: pvewarden-setup connect"
@@ -1226,12 +1201,14 @@ do_renew_cert() {
 enable_https() {
   confirm "This installation uses plain HTTP. Switch it to HTTPS on $LISTEN?\n\nThe server gets a certificate signed by the Proxmox CA, like a new install. Tokens stay the same. Every agent then has to use https:// instead of http:// and trust the Proxmox CA once; the next screen shows how." ||
     die "cancelled"
-  run pct exec "$CTID" -- sh -c "grep -q '^tls_cert' $CT_ETC/config.toml || sed -i '$TLS_CONFIG_SED' $CT_ETC/config.toml"
+  # the certificate first: a config that names a missing certificate would stop the server
   issue_tls_cert
-  info "restarting the pvewarden service"
-  slow pct exec "$CTID" -- systemctl restart pvewarden
+  info "turning HTTPS on in the server configuration"
+  run pct exec "$CTID" -- /usr/local/bin/pvewarden config enable-tls
+  restart_server
   [ "$DRY_RUN" = 1 ] && return 0
-  local url="https://$LISTEN:8765/mcp"
+  local url
+  url=$(mcp_url https)
   banner "${C_OK}pvewarden now uses HTTPS${C_OFF}"
   echo
   connection_fields "$url" "<the agent's token: unchanged>"
@@ -1246,10 +1223,9 @@ enable_https() {
 # ============================================================================================
 
 do_connect() {
-  load_state
-  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+  require_installed
   local url
-  url="$([ "$(tls_kind)" = http ] && echo http || echo https)://$LISTEN:8765/mcp"
+  url=$(mcp_url "$(installed_scheme)")
   banner "${C_OK}Connect an AI agent to pvewarden${C_OFF}"
   echo
   connection_fields "$url" "<token: shown at install; a new one: pvewarden-setup token>"
@@ -1262,12 +1238,11 @@ do_connect() {
 # ============================================================================================
 
 do_doctor() {
-  load_state
-  [ -n "$CTID" ] || die "no installation found ($SETUP_STATE is missing)"
+  require_installed
   local args=(doctor)
   [ "$VERBOSE" = 1 ] && args+=(-v)
   # read-only, so it also runs with --dry-run
-  pct exec "$CTID" -- runuser -u pvewarden -- /usr/local/bin/pvewarden "${args[@]}"
+  pct exec "$CTID" -- "${SERVICE_CLI[@]}" "${args[@]}"
 }
 
 usage() {

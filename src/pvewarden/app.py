@@ -35,7 +35,6 @@ class App:
         self.keys = KeyStore(cfg.state_dir / "keys")
         self.runs_dir = cfg.state_dir / "runs"
         self.fence = Fence(cfg.state_dir)  # one change per guest at a time; updates still running
-        self.pending_dir = self.fence.pending_dir
 
     # --- inventory and policy ------------------------------------------------------------
 
@@ -179,11 +178,8 @@ class App:
             raise GuestError(f"status failed on {g.vmid} ({g.name}): {out.strip()[-500:]}")
         return parse_status(out)
 
-    async def services(self, g: Guest) -> dict | None:
-        """None if the guest runs an older client without the 'services' command."""
+    async def services(self, g: Guest) -> dict:
         rc, out = await self.run(g, "services", timeout=60)
-        if "command not allowed" in out:
-            return None
         if rc != 0:
             raise GuestError(f"services failed on {g.vmid} ({g.name}): {out.strip()[-500:]}")
         return parse_services(out)
@@ -210,12 +206,7 @@ class App:
             if g.node in backup_nodes:
                 res["backup_running"] = True
             try:
-                rc, out = await self.run(g, "check", timeout=600)
-                if rc != 0:
-                    return res | {"error": out.strip()[-500:]}
-                pkgs = parse_upgradable(out)
-                if not pkgs and out.strip():
-                    return res | {"error": "unexpected 'check' output: the guest runs an outdated pvewarden client"}
+                pkgs = await self._check(g)
                 st = await self.status(g)
             except Exception as e:  # report per guest, keep checking the others
                 return res | {"error": str(e)}
@@ -240,10 +231,7 @@ class App:
 
     async def check_services(self, vmid: int) -> dict:
         g = await self.guest(vmid)
-        res = await self.services(g)
-        if res is None:
-            raise GuestError(f"guest {vmid} runs an outdated pvewarden client without 'services'; re-enroll it")
-        return {"vmid": vmid, "name": g.name, **res}
+        return {"vmid": vmid, "name": g.name, **await self.services(g)}
 
     async def _snapshot(self, g: Guest, description: str, client: str | None = None) -> str:
         pve = self.require_proxmox()
@@ -254,7 +242,7 @@ class App:
             await pve.create_snapshot(g, name, description)
         except ProxmoxError as e:
             if "locked (backup)" in str(e):
-                self._unlocked(replace_lock(g, "backup"))
+                self._unlocked(dataclasses.replace(g, lock="backup"))
             raise ProxmoxError(
                 f"snapshot of guest {g.vmid} ({g.name}) failed: {e}. Nothing else was done. Tell the user; "
                 "do not retry without a snapshot unless the user asks for that."
@@ -281,14 +269,19 @@ class App:
         self._no_update_running(g)
         return g
 
-    async def to_install(self, g: Guest, mode: str) -> list[str]:
-        """Packages apply_updates would install: official, not held, security only in mode 'security'."""
+    async def _check(self, g: Guest) -> list[dict]:
+        """The guest's upgradable packages ('check')."""
         rc, out = await self.run(g, "check", timeout=600)
         if rc != 0:
             raise GuestError(f"checking for updates failed on {g.vmid} ({g.name}): {out.strip()[-500:]}")
         pkgs = parse_upgradable(out)
         if not pkgs and out.strip():
-            raise GuestError(f"guest {g.vmid} ({g.name}) runs an outdated pvewarden client; re-enroll it")
+            raise GuestError(f"unexpected 'check' output from guest {g.vmid} ({g.name}); enroll it again")
+        return pkgs
+
+    async def to_install(self, g: Guest, mode: str) -> list[str]:
+        """Packages apply_updates would install: official, not held, security only in mode 'security'."""
+        pkgs = await self._check(g)
         return [p["name"] for p in pkgs if p["official"] and not p["held"] and (mode == "all" or p["security"])]
 
     async def apply_updates(
@@ -408,7 +401,7 @@ class App:
                 why = (
                     "pvewarden cannot tell whether the guest's last update is the one it started"
                     if theirs or ours
-                    else "the guest cannot report the update's result (outdated client, or its result is gone)"
+                    else "the guest cannot report the update's result (it is gone)"
                 )
                 self._hold(g, pending, "unknown", why)
 
@@ -580,7 +573,3 @@ def guest_run_id(source: str | Path) -> str | None:
             return None
     m = GUEST_RUN_RE.search(source)
     return m.group(1) if m else None
-
-
-def replace_lock(g: Guest, lock: str) -> Guest:
-    return dataclasses.replace(g, lock=lock)

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pvewarden.config import TOKEN_SECRET_ENV, ConfigError, load, parse, set_client_token
+from pvewarden.config import TOKEN_SECRET_ENV, ConfigError, enable_tls, load, parse, set_client_token
 
 ROOT = Path(__file__).parent.parent
 
@@ -138,3 +138,32 @@ def test_shared_ssh_key_is_optional():
     # admin-set addresses
     cfg = parse({"proxmox": {"host": "h", "token_id": "u@pve!t", "token_secret": "s"}})
     assert cfg.ssh.key is None
+
+
+def test_enable_tls_adds_only_the_tls_lines(tmp_path, monkeypatch, capsys):
+    from pvewarden.cli import main
+
+    path = filled_example(tmp_path, monkeypatch)
+    before = path.read_text()
+    main(["-c", str(path), "config", "enable-tls"])
+    http = load(path).http
+    assert http.scheme == "https"
+    assert (http.tls_cert, http.tls_key, http.tls_ca) == (
+        tmp_path / "tls.crt",
+        tmp_path / "tls.key",
+        tmp_path / "tls-ca.pem",
+    )
+    added = [line for line in path.read_text().splitlines() if line not in before.splitlines()]
+    assert [line.split(" =")[0] for line in added] == ["tls_cert", "tls_key", "tls_ca"]
+    assert path.stat().st_mode & 0o777 == 0o640
+    assert "turned on" in capsys.readouterr().err
+
+    assert enable_tls(path) is False  # already on: nothing changes
+    assert load(path).http.scheme == "https"
+
+
+def test_enable_tls_needs_an_http_section(tmp_path, monkeypatch):
+    path = filled_example(tmp_path, monkeypatch)
+    path.write_text(path.read_text().split("[http]")[0])
+    with pytest.raises(ConfigError, match=r"no \[http\]"):
+        enable_tls(path)

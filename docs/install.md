@@ -63,10 +63,10 @@ The questions, in order:
    way.
    - *On the container's LAN address, over HTTPS* (recommended). The certificate is signed by your
      Proxmox cluster's CA. Clients trust that CA once with a command from the summary.
-   - *Through a VPN inside the container*, e.g. WireGuard. You give the container's VPN address; the
-     server listens only there. You set the VPN up after the install, and the server starts by
-     itself once the address exists: [wireguard.md](wireguard.md). HTTPS is the default here too:
-     the VPN already encrypts, but some MCP clients refuse a remote server over plain HTTP.
+   - *Through a VPN inside the container*. You give the container's VPN address; the server
+     listens only there. You set the VPN up after the install, and the server starts by itself
+     once the address exists: [vpn.md](vpn.md). HTTPS is the default here too: some MCP clients
+     refuse a remote server over plain HTTP, whatever the network.
 6. **Name of the first agent.** It appears in the audit log and in snapshot descriptions.
 7. **Review.** The wizard lists everything it is about to create. Nothing happens before you confirm.
 
@@ -128,29 +128,14 @@ On the Proxmox host:
 pvewarden-setup upgrade
 ```
 
-Since 0.1.3 the installed `pvewarden-setup` first fetches the newest release's `pvewarden-setup`,
-checks its checksum and lets it do the upgrade. It never installs an older version than the server
-runs (`--allow-downgrade` if you mean it).
-
-**From 0.1.2 or older:** the installed script only knows its own version and would install that
-again (0.1.0 and 0.1.1 even downgrade the server). Download the current one first:
-
-```
-curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pvewarden-setup
-bash ./pvewarden-setup upgrade
-```
-
-It checks the checksum of everything it downloads. Checking the script itself is optional; the
-[README](../README.md#install) says how.
+The installed `pvewarden-setup` first fetches the newest release's `pvewarden-setup`, checks its
+checksum and lets it do the upgrade. It never installs an older version than the server runs
+(`--allow-downgrade` if you mean it).
 
 This updates the server in its container and the tools on the host. The configuration, tokens, guest
 keys, audit log and certificate are kept. It then offers to enroll every guest again
 (`pvewarden-enroll --all`), which updates their client. Say yes unless you know the guest client did
 not change. Guests keep their automatic-updates setting.
-
-**From 0.1.1 or older:** guests used to share one SSH key; since 0.1.2 each has its own. Enrolling
-again switches them, and the server refuses a guest until it is switched. Once every guest has its
-own key, the upgrade removes the old shared key from the server.
 
 ## Uninstall
 

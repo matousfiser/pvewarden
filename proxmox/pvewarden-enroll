@@ -21,7 +21,7 @@ POOL=pvewarden
 . "$CONF" # SERVER_CT= (or SERVER_CMD=), FROM=, optional POOL=
 : "${FROM:?FROM missing in $CONF}"
 [ -n "${SERVER_CT:-}${SERVER_CMD:-}" ] || {
-  echo "SERVER_CT missing in $CONF (pvewarden 0.1.2 needs it: run pvewarden-setup upgrade)" >&2
+  echo "SERVER_CT missing in $CONF: is pvewarden installed? (pvewarden-setup install)" >&2
   exit 1
 }
 

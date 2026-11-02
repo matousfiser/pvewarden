@@ -76,10 +76,10 @@ async def test_check_updates_isolates_failing_guest(app):
     assert results[101]["pending"] == 0
 
 
-async def test_check_updates_detects_outdated_client(app):
+async def test_check_updates_detects_output_it_cannot_read(app):
     app.runner.responses["check"] = (0, "openssl/noble-security 3.0.13 amd64 [upgradable from: 3.0.12]\n")
     (r,) = await app.check_updates([101])
-    assert "outdated" in r["error"]
+    assert "unexpected 'check' output" in r["error"]
 
 
 async def test_check_updates_unknown_vmid(app):
@@ -327,7 +327,7 @@ async def test_update_already_running_on_the_guest(app):
     app.runner.responses["upgrade-security"] = (75, "pvewarden: an update is already running on this guest\n")
     with pytest.raises(GuestError, match="already running"):
         await app.apply_updates(101)
-    assert not app.pending_dir.joinpath("101.json").exists()
+    assert not app.fence.pending_dir.joinpath("101.json").exists()
 
 
 # --- nothing to install: no snapshot ------------------------------------------------------------

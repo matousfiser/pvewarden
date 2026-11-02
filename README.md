@@ -50,7 +50,7 @@ Details: [docs/security.md](docs/security.md).
   client must support MCP elicitation. Without it, rollback and the other confirmed actions are
   refused; see [configuration](docs/configuration.md#policy).
 - Network: the agent's computer must reach the pvewarden container on TCP 8765, on its LAN address
-  or through a VPN inside the container ([WireGuard](docs/wireguard.md)). The container must reach
+  or through a VPN inside the container ([VPN](docs/vpn.md)). The container must reach
   the guests over SSH.
 
 ## Install
@@ -152,7 +152,7 @@ installed, since other things may use them.
 
 - [Install, upgrade, remove](docs/install.md)
 - [Connecting MCP clients](docs/clients.md)
-- [Reaching the server through WireGuard](docs/wireguard.md)
+- [Reaching the server through a VPN](docs/vpn.md)
 - [Configuration](docs/configuration.md)
 - [Security model](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)

@@ -284,9 +284,9 @@ def test_enroll_all_and_uninstall(enroll):
 
 
 def test_enroll_needs_the_server_in_its_config(enroll):
-    enroll.conf.write_text('PUBKEY="ssh-ed25519 AAAAOLD srv"\nFROM="192.0.2.10"\n')  # a 0.1.1 config
+    enroll.conf.write_text('FROM="192.0.2.10"\n')
     r = enroll("201")
-    assert r.returncode == 1 and "SERVER_CT missing" in r.stderr and "pvewarden-setup upgrade" in r.stderr
+    assert r.returncode == 1 and "SERVER_CT missing" in r.stderr and "pvewarden-setup install" in r.stderr
     assert r.steps == []
 
 

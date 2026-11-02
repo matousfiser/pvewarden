@@ -229,3 +229,28 @@ def set_client_token(path: Path | str, name: str) -> str:
     parse(tomllib.loads(text))  # never write a config the server would reject
     path.write_text(text)  # same file: owner and mode stay
     return token
+
+
+def enable_tls(path: Path | str) -> bool:
+    """Turn HTTPS on in [http], in place: tls_cert, tls_key and tls_ca next to the config file.
+
+    Returns False if HTTPS is already on. Like set_client_token, only lines are added, and the
+    result is validated before it is written.
+    """
+    path = Path(path)
+    text = path.read_text()
+    http = tomllib.loads(text).get("http")
+    if not isinstance(http, dict):
+        raise ConfigError(f"{path}: no [http] section")
+    if "tls_cert" in http:
+        return False
+    header = re.search(r"(?m)^\[http\][ \t]*(#.*)?\n", text)
+    if header is None:
+        raise ConfigError(f"{path}: [http] is not written as a plain section header")
+    d = path.parent
+    lines = f'tls_cert = "{d / "tls.crt"}"\ntls_key = "{d / "tls.key"}"\ntls_ca = "{d / "tls-ca.pem"}"\n'
+    text = text[: header.end()] + lines + text[header.end() :]
+    if parse(tomllib.loads(text)).http.scheme != "https":  # never write a config the server would reject
+        raise ConfigError(f"{path}: turning HTTPS on failed")
+    path.write_text(text)  # same file: owner and mode stay
+    return True

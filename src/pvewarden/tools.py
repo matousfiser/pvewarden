@@ -250,11 +250,10 @@ def create_server(app: App) -> MCPServer:
     )
     async def rollback_snapshot(vmid: int, snapshot: str, ctx: Context) -> dict | InputRequiredResult:
         plan = await expose(app.rollback_plan(vmid, snapshot))
-        created = (plan["created"] or "?")[:16].replace("T", " ")
-        message = (
-            f"Roll back {plan['name']} (VMID {vmid}) to snapshot {snapshot}, taken {created} UTC"
-            + (f" ({plan['description']})" if plan["description"] else "")
-            + "? Everything written on the guest since then is lost."
+        message = snapshot_question(
+            f"Roll back {plan['name']} (VMID {vmid}) to snapshot {snapshot}",
+            plan,
+            "Everything written on the guest since then is lost.",
         )
         asked = await expose(confirm(ctx, confirm_mode, message, f"rollback:{vmid}:{snapshot}"))
         if asked is not None:
@@ -271,11 +270,8 @@ def create_server(app: App) -> MCPServer:
     )
     async def delete_snapshot(vmid: int, snapshot: str, ctx: Context) -> dict | InputRequiredResult:
         plan = await expose(app.rollback_plan(vmid, snapshot, "deleted"))
-        created = (plan["created"] or "?")[:16].replace("T", " ")
-        message = (
-            f"Delete snapshot {snapshot} of {plan['name']} (VMID {vmid}), taken {created} UTC"
-            + (f" ({plan['description']})" if plan["description"] else "")
-            + "? It can no longer be rolled back to."
+        message = snapshot_question(
+            f"Delete snapshot {snapshot} of {plan['name']} (VMID {vmid})", plan, "It can no longer be rolled back to."
         )
         asked = await expose(confirm(ctx, confirm_mode, message, f"delete-one:{vmid}:{snapshot}"))
         if asked is not None:
@@ -306,3 +302,10 @@ def create_server(app: App) -> MCPServer:
         return await expose(app.delete_old_snapshots(older_than_days, vmid))
 
     return mcp
+
+
+def snapshot_question(action: str, plan: dict, consequence: str) -> str:
+    """The confirmation question for one snapshot: what, when it was taken, and what it means."""
+    created = (plan["created"] or "?")[:16].replace("T", " ")
+    described = f" ({plan['description']})" if plan["description"] else ""
+    return f"{action}, taken {created} UTC{described}? {consequence}"

@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+From a code review; no new features.
+
+- **Upgrading needs 0.1.3 or newer.** The code that migrated installs from 0.1.0 to 0.1.2 is gone
+  (shared guest SSH key, unrecorded ownership of the pool, role and user, the old enroll.conf, the
+  pip-installed server, guest clients without `services`). To upgrade an older install: uninstall
+  and install again.
+- Fix: the install refused an agent name with spaces or dots only after the container existed (the
+  config could not hold it). It is now checked when it is asked, like `pvewarden-setup token` does.
+- Fix: the install left `umask 077` in effect after writing the server config, so the host's files
+  written after it (enroll.conf, /opt/pvewarden) were readable by root only.
+- `pvewarden-setup renew-cert` turns HTTPS on with the new `pvewarden config enable-tls` in the
+  container, which validates the config before writing it, instead of sed. The certificate is now
+  in place before the config names it.
+- The upgrade's question about enrolling the guests again says what it does today: it updates the
+  guest client (each guest gets a fresh key; permissions and automatic updates stay).
+- Docs are tool-neutral: docs/wireguard.md became docs/vpn.md, a guide for any VPN with WireGuard
+  as one example; docs/clients.md describes proxies that add credentials in general. The service
+  no longer orders itself after `wg-quick@wg0`: it retries every 10 s until its address exists,
+  whatever the VPN.
+- Smaller code: shared helpers in pvewarden-setup (installing the server code, restarting the
+  service, the MCP address, the install check) and in the server (snapshot confirmations, the
+  update check, HTTP responses).
+
 ## 0.1.5 (2026-11-02)
 
 Clearer install, from the first production install:
@@ -12,7 +37,7 @@ Clearer install, from the first production install:
   address exists. New guide: docs/wireguard.md (also in Czech).
 - `pvewarden-setup renew-cert` switches an install made with plain HTTP to HTTPS on the same address
   (certificate signed by the Proxmox CA; tokens stay). With a VPN address, the wizard now defaults
-  to HTTPS too: some MCP clients (NanoClaw) refuse a remote server over plain HTTP.
+  to HTTPS too: some MCP clients refuse a remote server over plain HTTP.
 - Enrolling: VMs whose QEMU guest agent does not answer are no longer offered (and skipped with
   `--yes`); the wizard lists them with the steps to add the agent, including the power cycle.
 - New `pvewarden-setup doctor [-v]`: the server's self-check from the host, without `runuser` and

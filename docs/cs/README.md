@@ -11,7 +11,7 @@ nástrojů a co smí, rozhoduje Proxmox a server, ne prompt.
 > 22.04/24.04/26.04, kontejnery i VM. Zpětná vazba a issues jsou vítané.
 
 Podrobná dokumentace je v angličtině: [README](../../README.md), [instalace](install.md) (česky),
-[připojení klientů](../clients.md), [WireGuard](wireguard.md) (česky), [konfigurace](../configuration.md),
+[připojení klientů](../clients.md), [VPN](vpn.md) (česky), [konfigurace](../configuration.md),
 [bezpečnostní model](../security.md), [řešení problémů](../troubleshooting.md).
 
 ```
@@ -48,7 +48,7 @@ Agent:  ct101: snapshot pvewarden_20261031_145241, 4 balíky nainstalovány, slu
 - MCP klient se streamable HTTP, např. Claude Code. Pro potvrzovací dialogy musí umět MCP
   elicitation, jinak se rollback a ostatní potvrzované akce odmítnou.
 - Síť: počítač s agentem musí dosáhnout na kontejner pvewarden na TCP 8765, na jeho LAN adrese,
-  nebo přes VPN uvnitř kontejneru ([WireGuard](wireguard.md)). Kontejner musí dosáhnout na hosty
+  nebo přes VPN uvnitř kontejneru ([VPN](vpn.md)). Kontejner musí dosáhnout na hosty
   přes SSH.
 
 ## Instalace

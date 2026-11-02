@@ -8,11 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from pvewarden.config import parse
+from pvewarden.config import enable_tls, parse
 
 ROOT = Path(__file__).parent.parent
 SECRET = "0f1e2d3c-SECRET-TOKEN-VALUE"
-PUBKEY = "ssh-ed25519 AAAASERVERKEY pvewarden@pvewarden"
 
 STUBS = {
     "id": 'if [ "$1" = -u ]; then echo 0; else /usr/bin/id "$@"; fi\n',
@@ -61,7 +60,6 @@ esac
       "ip -o addr show") for a in ${FAKE_CT_ADDRS:-192.0.2.50}; do echo "2: eth0    inet $a/24 scope global eth0"; done ;;
       *install-server.sh*) [ -z "$FAKE_SERVER_INSTALL_FAILS" ] || exit 1 ;;
       *python3*) echo "192.0.2.0/24" ;;
-      "test -f /etc/pvewarden/id_ed25519") [ -f "$FAKE/shared_key" ] ;;
       "/usr/local/bin/pvewarden --version") echo "pvewarden ${FAKE_SERVER_VERSION:-0.0.1}" ;;
       "/usr/local/bin/pvewarden token "*) sleep "${FAKE_DELAY:-0}"; echo "NEW-TOKEN-FOR-${@: -1}"; echo "noise on stderr" >&2 ;;
       "test -f /etc/pvewarden/tls.crt") [ -z "$FAKE_NO_TLS" ] ;;
@@ -168,7 +166,6 @@ def host(tmp_path, keys, pve_ca):
                 "PATH": f"{bin_dir}:/usr/bin:/bin",
                 "FAKE": str(fake),
                 "FAKE_SECRET": SECRET,
-                "FAKE_PUBKEY": PUBKEY,
                 "PVEWARDEN_HOST_DIR": str(tmp_path / "opt"),
                 "PVEWARDEN_HOST_ETC": str(tmp_path / "etc"),
                 "PVEWARDEN_SBIN": str(sbin),
@@ -261,7 +258,8 @@ def test_install_creates_everything_and_never_shows_the_token_secret(host):
 
     enroll_conf = (host.state / "enroll.conf").read_text()
     assert "SERVER_CT=120" in enroll_conf and "FROM=192.0.2.50" in enroll_conf
-    assert "PUBKEY" not in enroll_conf and "\nkey = " not in config  # no shared key: one key per guest
+    assert "\nkey = " not in config  # no shared key: one key per guest
+    assert (host.state / "enroll.conf").stat().st_mode & 0o044  # the config's umask 077 did not leak
     assert (host.path / "opt/proxmox/pvewarden-enroll").exists()
 
 
@@ -351,6 +349,13 @@ def test_failed_install_says_what_it_left_behind(host):
     r = host.run("install", "--yes", **INSTALL_ENV, FAKE_START_FAILS="1")
     assert r.returncode != 0
     assert "container 120 was already created" in r.stderr and "pct destroy 120" in r.stderr
+
+
+@pytest.mark.parametrize("name", ["my agent", "claude.laptop", 'x"y', "a" * 65])
+def test_install_refuses_an_agent_name_the_config_cannot_hold(host, name):
+    r = host.run("install", "--yes", **INSTALL_ENV, PVEWARDEN_AGENT_NAME=name)
+    assert r.returncode == 1 and "agent name" in r.stderr
+    assert not [c for c in host.calls() if c.startswith(("pct create", "pveum"))]
 
 
 def test_refuses_short_password(host):
@@ -501,39 +506,10 @@ def test_uninstall_leaves_objects_it_did_not_create(host):
     assert "role Warden left alone" in r.stdout and "pool pvewarden left alone" in r.stdout
 
 
-def legacy_upgrade(host, **env):
-    host.state.mkdir()
-    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
-    host.mark("ct")
-    r = host.run("upgrade", "--yes", **env)
-    assert r.returncode == 0, r.stderr
-    return [line for line in (host.state / "owned.conf").read_text().splitlines() if not line.startswith("#")]
-
-
-def test_upgrade_from_an_older_install_does_not_claim_its_objects(host):
-    # 0.1.1 may have taken over a pool, role or user someone else made: never assume they are ours
-    assert legacy_upgrade(host) == []
-    host.mark("pool", "user", "role")
-    r = host.run("uninstall", "--yes")
-    calls = host.calls()
-    assert not any(c.startswith(("pveum user delete", "pveum role delete", "pveum pool delete")) for c in calls)
-    assert "pveum user delete pvewarden@pve" in r.stdout  # told how, not done
-
-
-def test_upgrade_from_an_older_install_claims_its_objects_when_told(host):
-    assert legacy_upgrade(host, PVEWARDEN_ADOPT_EXISTING="yes") == ["POOL=1", "ROLE=1", "USER=1"]
-
-
-def test_the_ownership_answer_is_asked_once(host):
-    legacy_upgrade(host)
-    host.run("upgrade", "--yes", PVEWARDEN_ADOPT_EXISTING="yes")
-    assert "POOL=1" not in (host.state / "owned.conf").read_text()  # the first answer stands
-
-
 def test_uninstall_removes_the_token_even_from_a_user_it_did_not_create(host):
     host.state.mkdir()
     (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\n")
-    (host.state / "owned.conf").write_text("# install before 0.1.2\n")
+    (host.state / "owned.conf").write_text("POOL=1\nROLE=1\n")  # the user existed before
     host.mark("ct", "user", "token")
     r = host.run("uninstall", "--yes")
     assert r.returncode == 0, r.stdout + r.stderr
@@ -613,7 +589,7 @@ def test_install_with_a_vpn_address_that_is_not_up_yet(host):
                  PVEWARDEN_USE_TLS="no")  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
     # not a failure: the next step, with the token still shown once
-    assert "it starts once 10.200.0.200 exists" in r.stdout and "docs/wireguard.md" in r.stdout
+    assert "it starts once 10.200.0.200 exists" in r.stdout and "docs/vpn.md" in r.stdout
     assert "NOT working" not in r.stdout and "Authorization: Bearer " in r.stdout
     assert "http://10.200.0.200:8765/mcp" in r.stdout
 
@@ -645,6 +621,18 @@ def test_upgrade(host):
     assert "ENROLL --all" in calls
     assert not any(c.startswith(("pct create", "pveum user token")) for c in calls)  # keeps the existing token
     assert (host.path / "opt/proxmox/pvewarden-setup").exists()
+    assert "SERVER_CT=120" in (host.state / "enroll.conf").read_text()
+
+
+def test_upgrade_keeps_an_existing_enroll_conf(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=10.200.0.200\nCT_IP=192.0.2.50\n")
+    (host.state / "enroll.conf").write_text("SERVER_CT=120\nFROM=192.0.2.99\nPOOL=pvewarden\n")  # FROM set by hand
+    host.mark("ct")
+    r = host.run("upgrade", "--yes")
+    assert r.returncode == 0, r.stderr
+    assert "FROM=192.0.2.99" in (host.state / "enroll.conf").read_text()
+    assert "pct exec 120 -- bash /root/pvewarden-src/deploy/install-server.sh 10.200.0.200" in host.calls()
 
 
 def test_a_failing_step_is_reported_not_silent(host):
@@ -660,34 +648,6 @@ def test_a_failing_step_is_reported_not_silent(host):
 def test_die_does_not_add_the_generic_failure_message(host):
     r = host.run("upgrade", "--yes")  # nothing installed
     assert "no installation found" in r.stderr and "a step failed" not in r.stderr
-
-
-def upgrade_from_0_1_1(host, **env):
-    host.state.mkdir()
-    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
-    (host.state / "enroll.conf").write_text('PUBKEY="ssh-ed25519 AAAAOLD srv"\nFROM=10.9.9.9\nPOOL=pvewarden\n')
-    host.mark("ct", "shared_key")
-    return host.run("upgrade", "--yes", **env)
-
-
-def test_upgrade_switches_guests_to_their_own_keys_then_removes_the_shared_key(host):
-    r = upgrade_from_0_1_1(host)
-    assert r.returncode == 0, r.stderr
-    conf = (host.state / "enroll.conf").read_text()
-    assert "SERVER_CT=120" in conf and "PUBKEY" not in conf and "FROM=10.9.9.9" in conf  # FROM as the admin set it
-    calls = host.calls()
-    enroll_at = calls.index("ENROLL --all")
-    removal = [i for i, c in enumerate(calls) if c.startswith(("pct exec 120 -- rm -f /etc/pvewarden/id_ed25519",
-                                                                 "pct exec 120 -- sed -i /^key = /d"))]  # fmt: skip
-    assert len(removal) == 2 and min(removal) > enroll_at  # only after every guest switched
-    assert "pct exec 120 -- sed -i /^key = /d /etc/pvewarden/config.toml" in calls
-
-
-def test_upgrade_keeps_the_shared_key_while_a_guest_is_not_switched(host):
-    r = upgrade_from_0_1_1(host, FAKE_ENROLL_FAILS="1")
-    assert r.returncode == 0, r.stderr
-    assert "some guests were not switched" in r.stdout
-    assert not [c for c in host.calls() if "id_ed25519" in c and " rm " in c]
 
 
 def test_interactive_ssh_keys_one_source_at_a_time_with_errors_shown(host, keys):
@@ -828,16 +788,18 @@ def test_renew_cert_switches_plain_http_to_https(host, tmp_path):
     ).stdout
     assert "IP Address:10.200.0.200" in text
     calls = host.calls()
-    assert any("sed -i" in c and "tls_cert" in c for c in calls)
-    assert "pct exec 120 -- systemctl restart pvewarden" in calls
+    enable = calls.index("pct exec 120 -- /usr/local/bin/pvewarden config enable-tls")
+    cert_pushed = next(i for i, c in enumerate(calls) if c.startswith("pct push 120") and "tls.crt" in c)
+    assert cert_pushed < enable  # the config never names a certificate that is not there yet
+    assert "pct exec 120 -- systemctl restart pvewarden" in calls[enable:]
     assert "pvewarden now uses HTTPS" in r.stdout and "https://10.200.0.200:8765/mcp" in r.stdout
     assert "PowerShell" in r.stdout  # how to trust the Proxmox CA
 
-    # the config edit the container runs, applied to the real config: the server then serves HTTPS
-    edit = 'eval "$(grep "^TLS_CONFIG_SED=" "$1")"; sed -i "$TLS_CONFIG_SED" "$2"'
-    subprocess.run(["bash", "-c", edit, "_", ROOT / "proxmox/pvewarden-setup", config], check=True)
+    # what the container runs, applied to the config the installer wrote: the server then serves HTTPS
+    assert enable_tls(config)
     http = parse(tomllib.loads(config.read_text())).http
     assert http.scheme == "https" and http.listen == "10.200.0.200" and list(http.clients) == ["agent"]
+    assert http.tls_ca == tmp_path / "tls-ca.pem"
 
 
 def test_vpn_access_defaults_to_https(host):

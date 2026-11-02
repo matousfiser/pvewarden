@@ -54,7 +54,7 @@ class DeniedLog:
         s = self.sources.get(key)
         if s is None:
             self.sources[key] = {"start": now, "first": _ts(), "last": _ts(), "count": 1, "path": path}
-            self._write("http_denied", ip=key, path=path)
+            self.audit.write("http_denied", ip=key, path=path)
         else:
             s["count"] += 1
             s["last"] = _ts()
@@ -65,11 +65,8 @@ class DeniedLog:
         for key, s in list(self.sources.items()):
             if force or now - s["start"] >= self.window:
                 if s["count"] > 1:
-                    self._write("http_denied_summary", ip=key, first=s["first"], last=s["last"], count=s["count"])
+                    self.audit.write("http_denied_summary", ip=key, first=s["first"], last=s["last"], count=s["count"])
                 del self.sources[key]
-
-    def _write(self, action: str, **fields) -> None:
-        self.audit.write(action, **fields)
 
 
 def _ts() -> str:

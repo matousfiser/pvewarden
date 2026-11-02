@@ -29,7 +29,6 @@ echo "    pip: installing the pinned, hash-checked dependencies (the slowest ste
 "$APP/venv/bin/pip" install -q --disable-pip-version-check --require-hashes --only-binary=:all: \
   -r "$SRC/requirements.lock"
 # pvewarden itself is plain Python from the (checksum-verified) source: copied, not built
-"$APP/venv/bin/pip" uninstall -q -y pvewarden 2>/dev/null || true # 0.1.1 and older installed it with pip
 rm -rf "${APP:?}/lib.new"
 install -d -o root -g root -m 0755 "$APP/lib.new"
 cp -r "$SRC/src/pvewarden" "$APP/lib.new/"

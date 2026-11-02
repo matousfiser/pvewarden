@@ -85,7 +85,7 @@ the audit log and in the descriptions of snapshots that agent caused.
 ```
 [http.clients]
 claude-laptop = "..."
-nanoclaw = "..."
+ci-agent = "..."
 ```
 
 To add or rotate one, use `pvewarden-setup token <name>` on the host or `pvewarden token <name>` in

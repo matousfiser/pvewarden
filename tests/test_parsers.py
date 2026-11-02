@@ -80,4 +80,4 @@ def test_clean_tail_drops_dpkg_progress_noise():
 def test_status_auto_updates():
     assert parse_status("auto_updates=yes\n")["auto_updates"] is True
     assert parse_status("auto_updates=no\n")["auto_updates"] is False
-    assert parse_status("reboot_required=no\n")["auto_updates"] is None  # older guest client
+    assert parse_status("reboot_required=no\n")["auto_updates"] is False

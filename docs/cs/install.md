@@ -60,10 +60,9 @@ Otázky v pořadí:
 5. **Jak se agenti připojí.** K hostům se kontejner v obou případech připojuje ze své LAN adresy.
    - *Na LAN adrese kontejneru přes HTTPS* (doporučeno). Certifikát podepíše certifikační autorita
      tvého Proxmoxu a klienti jí jednou začnou důvěřovat příkazem ze souhrnu.
-   - *Přes VPN uvnitř kontejneru*, např. WireGuard. Zadáš VPN adresu kontejneru a server poslouchá
-     jen na ní. VPN nastavíš po instalaci a server naběhne sám, jakmile adresa existuje:
-     [wireguard.md](wireguard.md). I tady je výchozí HTTPS: VPN sice šifruje sama, ale někteří MCP
-     klienti vzdálený server přes HTTP odmítnou.
+   - *Přes VPN uvnitř kontejneru*. Zadáš VPN adresu kontejneru a server poslouchá jen na ní. VPN
+     nastavíš po instalaci a server naběhne sám, jakmile adresa existuje: [vpn.md](vpn.md). I tady
+     je výchozí HTTPS: někteří MCP klienti vzdálený server přes HTTP odmítnou bez ohledu na síť.
 6. **Jméno prvního agenta.** Objevuje se v audit logu a v popisech snapshotů.
 7. **Kontrola.** Průvodce vypíše, co vytvoří. Dokud nepotvrdíš, nic se neděje.
 
@@ -121,29 +120,14 @@ Na Proxmox hostu:
 pvewarden-setup upgrade
 ```
 
-Od 0.1.3 si nainstalovaný `pvewarden-setup` nejdřív stáhne `pvewarden-setup` z nejnovějšího
-releasu, ověří jeho kontrolní součet a upgrade nechá na něm. Nikdy nenainstaluje starší verzi, než
-na serveru běží (pokud to opravdu chceš: `--allow-downgrade`).
-
-**Z verze 0.1.2 a starší:** nainstalovaný skript zná jen svou verzi a nainstaloval by ji znovu
-(0.1.0 a 0.1.1 dokonce server downgradují). Nejdřív stáhni aktuální:
-
-```
-curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pvewarden-setup
-bash ./pvewarden-setup upgrade
-```
-
-Kontrolní součet všeho, co stahuje, ověří sám. Ověření samotného skriptu je volitelné, postup je
-v [README](README.md#instalace).
+Nainstalovaný `pvewarden-setup` si nejdřív stáhne `pvewarden-setup` z nejnovějšího releasu, ověří
+jeho kontrolní součet a upgrade nechá na něm. Nikdy nenainstaluje starší verzi, než na serveru běží
+(pokud to opravdu chceš: `--allow-downgrade`).
 
 Aktualizuje server v kontejneru a nástroje na hostu. Konfigurace, tokeny, klíče hostů, audit log
 i certifikát zůstanou. Pak nabídne znovu zapsat všechny hosty, čímž se obnoví jejich klient.
 Potvrď to, pokud nevíš jistě, že se klient nezměnil. Nastavení automatických aktualizací hostů
 zůstane.
-
-**Z verze 0.1.1 a starší:** hosté dřív sdíleli jeden SSH klíč, od 0.1.2 má každý vlastní. Nové
-zapsání je převede a server do té doby hosta odmítá. Až mají vlastní klíč všichni, upgrade starý
-sdílený klíč ze serveru smaže.
 
 ## Odstranění
 

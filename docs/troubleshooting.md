@@ -78,8 +78,7 @@ blocked and why.
 **"another pvewarden operation on guest … is in progress":** pvewarden makes one change per guest at
 a time. Wait for the other one (often an update) to finish.
 
-**"has no pvewarden key of its own yet":** the guest was enrolled before 0.1.2, or enrolling it
-stopped halfway. Enroll it again: `pvewarden-enroll <vmid>`.
+**"has no pvewarden key of its own yet":** enrolling the guest stopped halfway. Enroll it again: `pvewarden-enroll <vmid>`.
 
 **SSH "Permission denied":** the guest's client is missing, it accepts the key only from another
 address (`from=` in `~pvewarden/.ssh/authorized_keys`, see

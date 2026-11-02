@@ -86,10 +86,10 @@ How a client trusts a CA depends on its runtime:
 **Python 3.13 and newer:** these versions check certificates strictly by default, and they reject
 the Proxmox CA because it lacks a key-usage extension: `CA cert does not include key usage
 extension`. pvewarden's own server code relaxes that one check for the pinned Proxmox CA. A
-Python MCP client has to do the same. If it cannot, use plain HTTP inside a VPN, or a reverse
-proxy (both below).
+Python MCP client has to do the same. If it cannot, use a reverse proxy with a publicly trusted
+certificate (below).
 
-## Agents that run in containers (NanoClaw and similar)
+## Agents that run in containers
 
 When the agent runs in a container, the CA and the variable must be inside that container:
 
@@ -99,17 +99,22 @@ When the agent runs in a container, the CA and the variable must be inside that 
 4. Make sure the container can reach the endpoint. The server only accepts traffic on the
    address it listens on, and the agent's container network must route there.
 
-If changing the agent's container is impractical, two alternatives need no certificate on the
-client:
+## Clients behind a proxy that adds credentials
 
-- **Plain HTTP inside a VPN that ends in the server container.** At install, choose "Through a VPN
-  inside the container" and no HTTPS. WireGuard is the usual choice: it already encrypts and
-  authenticates the traffic, so TLS on top adds nothing. Setup: [wireguard.md](wireguard.md).
-  Some clients refuse a remote server over plain HTTP whatever the network (NanoClaw, for
-  example); `pvewarden-setup renew-cert` switches an install to HTTPS later.
+Some setups give the agent no secrets at all: a proxy between the agent and the network adds the
+token to each request. Such a proxy opens the TLS connection to pvewarden itself, so it is the
+proxy, not the agent, that has to trust the Proxmox CA. If the proxy cannot be given an extra CA,
+two ways remain:
+
+- **An exception for this one host** in the proxy, if it offers one: it then skips certificate
+  checks only for the pvewarden address. Acceptable when that address is reachable only through a
+  network you trust (a VPN that ends in the server container).
 - **A reverse proxy with a publicly trusted certificate.** For example Caddy or Traefik with a
   Let's Encrypt certificate (DNS challenge) for a name in your own domain, forwarding to
   pvewarden. Clients then need no extra trust at all.
+
+Plain HTTP inside a VPN that ends in the server container works only with clients that accept it;
+many MCP clients refuse a remote server over plain HTTP, whatever the network.
 
 ## The token
 
