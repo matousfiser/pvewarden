@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4 (2026-11-02)
+
+- Fix: `pvewarden-setup upgrade` installed the version recorded in `/etc/pvewarden/setup.conf`
+  (the one installed last) instead of its own. 0.1.3 therefore switched to the newest setup, which
+  installed the old version again; the downgrade blamed on an old script in 0.1.3 had this cause.
+- **Upgrading:** from 0.1.3, `pvewarden-setup upgrade` switches to 0.1.4's setup by itself. From
+  0.1.2 or older, download the current `pvewarden-setup` first (docs/install.md).
+
 ## 0.1.3 (2026-11-02)
 
 - `pvewarden-setup upgrade` first switches to the newest release's `pvewarden-setup` (checksum
