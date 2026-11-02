@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 (2026-11-02)
 
 Clearer install, from the first production install:
 
