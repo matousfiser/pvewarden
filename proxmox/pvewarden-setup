@@ -202,9 +202,12 @@ preflight() {
 }
 
 load_state() {
+  local own_version=$VERSION
   CTID="" LISTEN="" CT_IP="" CT_HOSTNAME=pvewarden
   # shellcheck source=/dev/null
   [ -f "$SETUP_STATE" ] && . "$SETUP_STATE"
+  # setup.conf records the version installed last; what this script installs is its own version
+  VERSION=$own_version
   return 0
 }
 

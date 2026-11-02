@@ -862,7 +862,8 @@ def test_refuses_a_tampered_release(host, release):
 
 def installed(host):
     host.state.mkdir()
-    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    # as an older setup wrote it: with the version it installed
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\nVERSION=0.1.0\n")
     (host.state / "owned.conf").write_text("POOL=1\n")
     host.mark("ct")
 
@@ -901,6 +902,16 @@ def test_the_newest_setup_upgrades_itself(host, release):
     assert r.returncode == 0, r.stderr
     assert "switching" not in r.stdout
     assert f"download/v{release['version']}/pvewarden-{release['version']}.tar.gz" in r.stdout
+
+
+def test_the_version_recorded_in_setup_conf_is_not_what_gets_installed(host, release):
+    # 0.1.3 read VERSION from setup.conf over its own: it switched to the newest setup, which then
+    # downloaded and installed the old version recorded there
+    installed(host)
+    r = host.run("upgrade", "--yes", source=False, script=release["script"], FAKE_LATEST=release["version"])
+    assert r.returncode == 0, r.stderr
+    assert "switching" not in r.stdout and "0.1.0" not in r.stdout
+    assert f"VERSION={release['version']}" in (host.state / "setup.conf").read_text()
 
 
 def test_without_github_the_script_upgrades_to_its_own_version(host, release):
