@@ -4,12 +4,13 @@ import asyncio
 import logging
 import secrets
 import time
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from mcp_types import InputRequiredResult
+from pydantic import Field
 
 from pvewarden import __version__
 from pvewarden.app import App
@@ -36,6 +37,16 @@ CHANGING_TOOLS = frozenset(
     }
 )
 log = logging.getLogger(__name__)
+
+# parameters as the agent sees them in the tool schema
+VMID = Annotated[int, Field(description="Proxmox VMID of the guest, e.g. 101 (see list_guests).")]
+SNAPSHOT = Annotated[
+    str,
+    Field(
+        description="Snapshot name as list_snapshots shows it. pvewarden snapshots are named "
+        "pvewarden_YYYYMMDD_HHMMSS (UTC); only those can be used here."
+    ),
+]
 
 
 def _scope(ctx: Context | None) -> dict:
@@ -138,8 +149,10 @@ def create_server(app: App) -> MCPServer:
     @mcp.tool(
         annotations=READ_ONLY,
         description=(
-            "List guests pvewarden can see, with status, Proxmox tags and permissions "
-            f"(may_update = tag '{upd}', may_reboot = tag '{rbt}'). source='static-config' means Proxmox "
+            "List guests pvewarden can see, with VMID, name, status, Proxmox tags and permissions "
+            f"(may_update = tag '{upd}', may_reboot = tag '{rbt}'). Start here: it is how you find the "
+            "VMIDs the other tools take and what each guest allows. Does not contact the guests; "
+            "check_updates does. source='static-config' means Proxmox "
             "is not connected and guests come from the server config; that is expected, not an error."
         ),
     )
@@ -157,36 +170,62 @@ def create_server(app: App) -> MCPServer:
             "without a pvewarden snapshot; mention it to the user, it explains updates nobody asked for. "
             "'lock' is a Proxmox lock on the guest (e.g. 'backup'): updates, snapshots and reboots wait until "
             "it is gone. backup_running=true: a Proxmox backup runs on that node now, updates would be much "
-            "slower; suggest waiting until it is done. Without vmids, checks every running guest. Read-only. "
+            "slower; suggest waiting until it is done. Without vmids, checks every running guest. Read-only: "
+            "use it to see what is pending, apply_updates to install. "
             "Returns {guests: [...], pvewarden: {...}}. 'pvewarden' is about pvewarden itself: if it has "
             "'new_version', tell the user that a newer pvewarden is out and how to upgrade ('upgrade'); "
             "security_fix=true means the newer release fixes a security problem: say so first. You cannot "
             "upgrade pvewarden yourself."
         ),
     )
-    async def check_updates(vmids: list[int] | None = None) -> dict:
+    async def check_updates(
+        vmids: Annotated[
+            list[int] | None, Field(description="Proxmox VMIDs to check, e.g. [101, 102]; omit for all running guests.")
+        ] = None,
+    ) -> dict:
         guests, pvewarden = await asyncio.gather(expose(app.check_updates(vmids)), app.release.notice())
         return {"guests": guests, "pvewarden": pvewarden}
 
     @mcp.tool(
         annotations=READ_ONLY,
-        description="systemd state of a guest: overall state (running, degraded, ...) and failed units.",
+        description=(
+            "systemd state of one guest: overall state (running, degraded, ...) and the failed units. Use it "
+            "to look at a guest's health, e.g. before an update or when the user reports a problem; "
+            "apply_updates and reboot_guest already compare it themselves. Read-only. Refused for a guest "
+            "that is not running (list_guests shows the status)."
+        ),
     )
-    async def check_services(vmid: int) -> dict:
+    async def check_services(vmid: VMID) -> dict:
         return await expose(app.check_services(vmid))
 
     @mcp.tool(
         annotations=READ_ONLY,
-        description="List snapshots of a guest; 'pvewarden' marks snapshots created by pvewarden.",
+        description=(
+            "List the Proxmox snapshots of one guest with name, creation time and description. "
+            "pvewarden=true marks snapshots pvewarden took (named pvewarden_YYYYMMDD_HHMMSS); only those "
+            "can be rolled back to or deleted with pvewarden. Call it to get the exact name before "
+            "rollback_snapshot or delete_snapshot. Read-only."
+        ),
     )
-    async def list_snapshots(vmid: int) -> list[dict]:
+    async def list_snapshots(vmid: VMID) -> list[dict]:
         return await expose(app.list_snapshots(vmid))
 
     @mcp.tool(
         annotations=CHANGES,
-        description=f"Create a Proxmox snapshot of a guest (requires tag '{upd}'). Returns the snapshot name.",
+        description=(
+            f"Create a Proxmox snapshot of a guest now (requires tag '{upd}'), named "
+            "pvewarden_YYYYMMDD_HHMMSS (UTC); returns the name. Not needed before apply_updates, which takes "
+            "its own snapshot. Snapshots use storage until deleted (delete_snapshot, delete_old_snapshots). "
+            "Refused while Proxmox locks the guest (e.g. during a backup)."
+        ),
     )
-    async def snapshot_guest(vmid: int, ctx: Context, description: str = "") -> str:
+    async def snapshot_guest(
+        vmid: VMID,
+        ctx: Context,
+        description: Annotated[
+            str, Field(description="Why the snapshot is taken; stored in Proxmox next to your client name.")
+        ] = "",
+    ) -> str:
         return await expose(app.snapshot(vmid, description, client_name(ctx)))
 
     @mcp.tool(
@@ -208,7 +247,15 @@ def create_server(app: App) -> MCPServer:
         ),
     )
     async def apply_updates(
-        vmid: int, ctx: Context, mode: Literal["security", "all"] = "security", snapshot: bool = True
+        vmid: VMID,
+        ctx: Context,
+        mode: Annotated[
+            Literal["security", "all"],
+            Field(description="'security': security updates only; 'all': also regular updates."),
+        ] = "security",
+        snapshot: Annotated[
+            bool, Field(description="Take a snapshot first. Keep true; false needs the user's consent.")
+        ] = True,
     ) -> dict | InputRequiredResult:
         g = await expose(app.update_plan(vmid, mode))
         planned = await expose(app.to_install(g, mode))
@@ -227,21 +274,23 @@ def create_server(app: App) -> MCPServer:
         description=(
             "Wait for an update that apply_updates reported as still_running and return its result, in "
             "the same form as apply_updates (waits up to 30 minutes, then reports still_running again). "
+            "Pass the vmid of that apply_updates call. "
             "never_started=true means nothing was installed. If pvewarden cannot tell what happened, it "
             "keeps the guest blocked and says a human must check it: tell the user, do not retry."
         ),
     )
-    async def update_result(vmid: int) -> dict:
+    async def update_result(vmid: VMID) -> dict:
         return await expose(app.update_result(vmid))
 
     @mcp.tool(
         annotations=DESTRUCTIVE,
         description=(
             f"Reboot a guest through Proxmox (requires tag '{rbt}') and wait until it answers again "
-            "(up to 5 minutes). Returns kernel and uptime after the reboot."
+            "(up to 5 minutes). Returns kernel and uptime after the reboot. Use it when check_updates or "
+            "apply_updates report reboot_required. Refused while Proxmox locks the guest."
         ),
     )
-    async def reboot_guest(vmid: int) -> dict:
+    async def reboot_guest(vmid: VMID) -> dict:
         return await expose(app.reboot(vmid))
 
     @mcp.tool(
@@ -249,12 +298,13 @@ def create_server(app: App) -> MCPServer:
         description=(
             f"Roll a guest back to a pvewarden snapshot and start it (requires tag '{upd}'). DISCARDS ALL "
             "CHANGES made since the snapshot, including application data. Use only when the user "
-            "explicitly asks for it. If the guest had to be started, waits until it answers again "
+            "explicitly asks for it. Get the snapshot name from list_snapshots. If the guest had to be "
+            "started, waits until it answers again "
             "(back_online), like reboot_guest."
             + (" pvewarden asks the user to confirm in the client; if they decline, nothing changes." if asks else "")
         ),
     )
-    async def rollback_snapshot(vmid: int, snapshot: str, ctx: Context) -> dict | InputRequiredResult:
+    async def rollback_snapshot(vmid: VMID, snapshot: SNAPSHOT, ctx: Context) -> dict | InputRequiredResult:
         plan = await expose(app.rollback_plan(vmid, snapshot))
         message = snapshot_question(
             f"Roll back {plan['name']} (VMID {vmid}) to snapshot {snapshot}",
@@ -270,11 +320,12 @@ def create_server(app: App) -> MCPServer:
         annotations=DESTRUCTIVE,
         description=(
             f"Delete one pvewarden snapshot of a guest by name (requires tag '{upd}'); other snapshots are "
-            "never touched. Use it to remove specific snapshots; delete_old_snapshots removes by age."
+            "never touched. Get the name from list_snapshots. Use it to remove specific snapshots; "
+            "delete_old_snapshots removes by age."
             + (" pvewarden asks the user to confirm in the client; if they decline, nothing changes." if asks else "")
         ),
     )
-    async def delete_snapshot(vmid: int, snapshot: str, ctx: Context) -> dict | InputRequiredResult:
+    async def delete_snapshot(vmid: VMID, snapshot: SNAPSHOT, ctx: Context) -> dict | InputRequiredResult:
         plan = await expose(app.rollback_plan(vmid, snapshot, "deleted"))
         message = snapshot_question(
             f"Delete snapshot {snapshot} of {plan['name']} (VMID {vmid})", plan, "It can no longer be rolled back to."
@@ -287,13 +338,20 @@ def create_server(app: App) -> MCPServer:
     @mcp.tool(
         annotations=DESTRUCTIVE,
         description=(
-            "Delete pvewarden snapshots older than N days; other snapshots are never touched. "
-            f"Without vmid, cleans all guests tagged '{upd}'."
+            "Delete pvewarden snapshots older than N days (default 7); other snapshots are never touched. "
+            f"Without vmid, cleans all guests tagged '{upd}'. Returns the deleted snapshots; an empty list "
+            "means none were old enough. To delete one specific snapshot, use delete_snapshot."
             + (" pvewarden asks the user to confirm in the client; if they decline, nothing changes." if asks else "")
         ),
     )
     async def delete_old_snapshots(
-        ctx: Context, older_than_days: int = 7, vmid: int | None = None
+        ctx: Context,
+        older_than_days: Annotated[
+            int, Field(ge=0, description="Delete snapshots older than this many days; 0 = all pvewarden snapshots.")
+        ] = 7,
+        vmid: Annotated[
+            int | None, Field(description="Proxmox VMID of one guest; omit for every guest that allows updates.")
+        ] = None,
     ) -> list[dict] | InputRequiredResult:
         doomed = await expose(app.old_snapshots(older_than_days, vmid))
         if not doomed:

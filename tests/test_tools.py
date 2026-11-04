@@ -284,3 +284,26 @@ async def test_delete_snapshot_declined_or_foreign(snap_app):
         res = await client.call_tool("delete_snapshot", {"vmid": 101, "snapshot": "manual"})
         assert res.is_error and "only snapshots created by pvewarden can be deleted" in text(res)
     assert len(asked) == 1 and len(snap_app.pve.snaps[101]) == 2 and snap_app.pve.events == []
+
+
+async def test_every_parameter_is_described_for_the_agent(app):
+    async with Client(create_server(app)) as client:
+        tools = (await client.list_tools()).tools
+    for t in tools:
+        for name, prop in t.input_schema.get("properties", {}).items():
+            assert prop.get("description"), f"{t.name}.{name} has no description"
+        assert "ctx" not in t.input_schema.get("properties", {})
+
+
+async def test_check_services_refuses_a_stopped_guest(app):
+    async with Client(create_server(app)) as client:
+        res = await client.call_tool("check_services", {"vmid": 104})
+    assert res.is_error and "stopped" in text(res)
+    assert app.runner.calls == []  # not contacted
+
+
+async def test_negative_age_is_refused(app):
+    async with Client(create_server(app)) as client:
+        res = await client.call_tool("delete_old_snapshots", {"older_than_days": -1})
+    assert res.is_error
+    assert app.pve.events == []

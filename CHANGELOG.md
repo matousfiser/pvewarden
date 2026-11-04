@@ -3,6 +3,14 @@
 A release that fixes a security problem has a bullet starting with `**Security:**`; installed
 servers tell their agents about it (see docs/security.md, "New versions").
 
+## 0.1.8 (unreleased)
+
+- Every tool parameter has a description in the tool schema (the VMID, the snapshot name format,
+  update modes), and the tools say when to use them and which tool comes next: list_snapshots
+  before a rollback or deletion, check_updates to look and apply_updates to install.
+- `check_services` refuses a guest that is not running with a clear message instead of an SSH
+  timeout. `delete_old_snapshots` refuses a negative age.
+
 ## 0.1.7 (2026-11-04)
 
 - **pvewarden tells you about new versions.** The server asks GitHub's release list once a day and

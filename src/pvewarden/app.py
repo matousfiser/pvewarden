@@ -233,6 +233,7 @@ class App:
 
     async def check_services(self, vmid: int) -> dict:
         g = await self.guest(vmid)
+        self._running(g)
         return {"vmid": vmid, "name": g.name, **await self.services(g)}
 
     async def _snapshot(self, g: Guest, description: str, client: str | None = None) -> str:
