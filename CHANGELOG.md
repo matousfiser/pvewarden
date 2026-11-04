@@ -3,7 +3,7 @@
 A release that fixes a security problem has a bullet starting with `**Security:**`; installed
 servers tell their agents about it (see docs/security.md, "New versions").
 
-## 0.1.7 (unreleased)
+## 0.1.7 (2026-11-04)
 
 - **pvewarden tells you about new versions.** The server asks GitHub's release list once a day and
   `check_updates` reports a newer pvewarden to the agent, including whether a release since yours
