@@ -9,6 +9,7 @@ from pvewarden.app import App
 from pvewarden.config import ProxmoxConfig, parse
 from pvewarden.errors import ProxmoxError
 from pvewarden.proxmox import Guest
+from pvewarden.release import parse_releases
 
 UPD = "pvewarden-update"
 RBT = "pvewarden-reboot"
@@ -113,6 +114,32 @@ class FakeProxmox:
     async def start(self, g):
         self._guests[g.vmid] = replace(self._guests[g.vmid], status="running")
         self.events.append(("start", g.vmid))
+
+
+class FakeGitHub:
+    """Replaces the request to GitHub's release list: tests never reach the network."""
+
+    def __init__(self):
+        self.releases: list[dict] = []  # as GitHub answers: tag_name, body, draft, prerelease, html_url
+        self.error: Exception | None = None
+        self.calls = 0
+
+    def release(self, version: str, body: str = "", **extra) -> None:
+        url = f"https://github.com/matousfiser/pvewarden/releases/tag/v{version}"
+        self.releases.append({"tag_name": f"v{version}", "body": body, "html_url": url, **extra})
+
+    async def __call__(self, timeout: float = 10) -> list[dict]:
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return parse_releases(self.releases)
+
+
+@pytest.fixture(autouse=True)
+def github(monkeypatch):
+    fake = FakeGitHub()
+    monkeypatch.setattr("pvewarden.release.fetch_releases", fake)
+    return fake
 
 
 def make_config(tmp_path: Path, **extra) -> dict:

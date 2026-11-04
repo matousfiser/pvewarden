@@ -11,9 +11,14 @@ pvewarden-setup doctor        # add -v to see what each check saw
 Inside the server container (`pct enter <ctid>`) the same is
 `runuser -u pvewarden -- pvewarden doctor`.
 
-It checks the config, the Proxmox API and the token's privileges (too few *and* too many). Then it
+It checks the config, whether a newer pvewarden is out, the Proxmox API and the token's privileges
+(too few *and* too many). Then it
 connects over SSH to every guest in the pool. Every failure comes with a hint. `pvewarden-setup`
 runs the same check at the end of the install.
+
+A `pvewarden version` line with "could not ask GitHub" is information, not a fault: the container
+cannot reach `api.github.com` (no internet, a proxy, a firewall). Allow HTTPS to it, or set
+`check_new_version = false` and watch the releases on GitHub yourself.
 
 ## Logs
 

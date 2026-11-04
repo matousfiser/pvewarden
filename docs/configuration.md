@@ -19,7 +19,8 @@ example is [config.example.toml](../config.example.toml).
 
 | Key | Default | |
 |---|---|---|
-| `state_dir` | `/var/lib/pvewarden` | Audit log (`audit.jsonl`), full apt output of every update (`runs/`), the guests' SSH keys (`keys/<vmid>`), SSH `known_hosts`, updates still running (`pending/`) |
+| `state_dir` | `/var/lib/pvewarden` | Audit log (`audit.jsonl`), full apt output of every update (`runs/`), the guests' SSH keys (`keys/<vmid>`), SSH `known_hosts`, updates still running (`pending/`), the last answer about new versions (`release-check.json`) |
+| `check_new_version` | `true` | Ask GitHub once a day whether a newer pvewarden is out, and tell the agent (in `check_updates`) and `doctor`. It only tells: upgrading stays `pvewarden-setup upgrade` on the host. The request carries nothing about your installation. See [security.md](security.md#new-versions). |
 
 ## `[proxmox]`
 

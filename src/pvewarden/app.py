@@ -21,6 +21,7 @@ from pvewarden.fence import Fence
 from pvewarden.guest import GuestRunner, clean_tail, parse_services, parse_status, parse_upgradable
 from pvewarden.keys import KeyStore
 from pvewarden.proxmox import Guest, ProxmoxClient
+from pvewarden.release import ReleaseCheck
 
 SNAPSHOT_PREFIX = "pvewarden_"
 MODES = ("security", "all")
@@ -35,6 +36,7 @@ class App:
         self.keys = KeyStore(cfg.state_dir / "keys")
         self.runs_dir = cfg.state_dir / "runs"
         self.fence = Fence(cfg.state_dir)  # one change per guest at a time; updates still running
+        self.release = ReleaseCheck(cfg.state_dir, cfg.check_new_version)
 
     # --- inventory and policy ------------------------------------------------------------
 

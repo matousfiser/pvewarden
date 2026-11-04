@@ -1,5 +1,17 @@
 # Changelog
 
+A release that fixes a security problem has a bullet starting with `**Security:**`; installed
+servers tell their agents about it (see docs/security.md, "New versions").
+
+## 0.1.7 (unreleased)
+
+- **pvewarden tells you about new versions.** The server asks GitHub's release list once a day and
+  `check_updates` reports a newer pvewarden to the agent, including whether a release since yours
+  fixes a security problem, with the upgrade command. `doctor` checks it too. It only tells: the
+  upgrade stays `pvewarden-setup upgrade` on the host. The request sends nothing about the
+  installation; turn it off with `check_new_version = false`.
+- `check_updates` now returns `{guests: [...], pvewarden: {...}}` instead of a bare list of guests.
+
 ## 0.1.6 (2026-11-02)
 
 From a code review; no new features.

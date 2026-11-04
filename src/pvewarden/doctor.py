@@ -8,8 +8,10 @@ import stat
 import tempfile
 from dataclasses import dataclass
 
+from pvewarden import __version__
 from pvewarden.app import App
 from pvewarden.errors import ProxmoxError
+from pvewarden.release import RELEASES_URL, UPGRADE_HINT, compare
 
 REQUIRED_PRIVS = {"VM.Audit", "VM.Snapshot", "VM.Snapshot.Rollback", "VM.PowerMgmt"}
 # reading guest IPs from the qemu guest agent: VM.Monitor up to PVE 8, VM.GuestAgent.Audit from PVE 9
@@ -276,8 +278,28 @@ async def check_guests(app: App) -> list[Result]:
     return results
 
 
+async def check_version(app: App) -> Result:
+    """Is a newer pvewarden out? Asks GitHub now, whatever the server asked last."""
+    title = "pvewarden version"
+    if not app.release.enabled:
+        return info(title, f"{__version__}; checking for new versions is off (check_new_version = false)")
+    cache = await app.release.refresh()
+    if "error" in cache and cache.get("attempted") != cache.get("checked"):
+        return info(
+            title,
+            f"{__version__}; could not ask GitHub for new versions: {cache['error']}",
+            f"this container needs HTTPS access to {RELEASES_URL.split('/')[2]}, or set check_new_version = false",
+        )
+    c = compare(cache.get("releases", []))
+    if "new_version" not in c:
+        return ok(title, f"{__version__}, the newest release")
+    fix = ", WITH SECURITY FIXES" if c["security_fix"] else ""
+    return warn(title, f"pvewarden {c['new_version']} is out{fix} (this is {__version__})", UPGRADE_HINT)
+
+
 async def run_checks(app: App) -> list[Result]:
     results = check_local(app)
+    results.append(await check_version(app))
     results += await check_proxmox(app)
     results += await check_guests(app)
     return results

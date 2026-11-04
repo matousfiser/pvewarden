@@ -121,6 +121,17 @@ blocked until a human has checked it (`pvewarden pending clear`); the agent cann
   private key is created in the container and never leaves it; only a signing request goes to the
   host.
 
+## New versions
+
+The server asks GitHub's list of pvewarden releases once a day
+(`https://api.github.com/repos/matousfiser/pvewarden/releases`) and tells the agent and `doctor`
+when a newer one is out, and whether a release since yours fixes a security problem. The request is
+a plain GET with the User-Agent `pvewarden`: no version, no guest names, no identifier. The answer is
+only compared with the running version; nothing from it is run or installed. The server never
+upgrades itself: it has no root on the Proxmox host, and upgrading stays `pvewarden-setup upgrade`
+(which checks what it downloads, see [Supply chain](#supply-chain)). Turn it off with
+`check_new_version = false`; then nothing tells you about new releases except GitHub itself.
+
 ## Snapshots and rollback
 
 What a pvewarden snapshot is, so you know what a rollback brings back:

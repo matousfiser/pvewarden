@@ -102,7 +102,7 @@ Other clients, agents in containers and HTTP behind a VPN: [docs/clients.md](doc
 | Tool | What it does | Needs |
 |---|---|---|
 | `list_guests` | Guests in the pool, their status, tags and permissions | – |
-| `check_updates` | Pending updates per guest: security or not, official or third-party, reboot needed, automatic updates on, Proxmox locks | – |
+| `check_updates` | Pending updates per guest: security or not, official or third-party, reboot needed, automatic updates on, Proxmox locks; also whether a newer pvewarden is out | – |
 | `check_services` | systemd state and failed units | – |
 | `list_snapshots` | Snapshots of a guest; marks the ones pvewarden took | – |
 | `snapshot_guest` | Take a snapshot | `pvewarden-update` |

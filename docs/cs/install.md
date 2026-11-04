@@ -114,7 +114,10 @@ je host pro agenty jen ke čtení. Host vyřazený z poolu `pvewarden` pro pvewa
 
 ## Aktualizace pvewarden
 
-Na Proxmox hostu:
+O novém releasu se dozvíš od svého agenta (`check_updates` ho ohlásí, včetně toho, jestli opravuje
+bezpečnostní problém), nebo z `pvewarden-setup doctor`. Server se GitHubu ptá jednou denně; vypnout
+to jde volbou `check_new_version = false` (viz [configuration.md](../configuration.md)). Upgrade je
+vždy tvůj krok, na Proxmox hostu:
 
 ```
 pvewarden-setup upgrade

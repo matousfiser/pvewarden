@@ -122,7 +122,10 @@ hides it from pvewarden entirely.
 
 ## Upgrade
 
-On the Proxmox host:
+You learn about a new release from your agent (`check_updates` reports it, and says when it fixes a
+security problem) or from `pvewarden-setup doctor`. The server asks GitHub once a day; see
+[configuration.md](configuration.md) to turn that off. Upgrading is always your step, on the
+Proxmox host:
 
 ```
 pvewarden-setup upgrade

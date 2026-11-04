@@ -4,6 +4,10 @@
 # Audit log, per-run update logs, SSH known_hosts and the guests' SSH keys (keys/<vmid>)
 state_dir = "/var/lib/pvewarden"
 
+# Ask GitHub once a day whether a newer pvewarden is out (a plain GET, nothing about this
+# installation is sent). The agent and `pvewarden doctor` then tell you; nothing is upgraded.
+check_new_version = true
+
 [proxmox]
 # Must match a name in the Proxmox certificate (map it in /etc/hosts if needed)
 host = "pve.example.lan"

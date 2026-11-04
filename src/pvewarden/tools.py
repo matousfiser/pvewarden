@@ -1,5 +1,6 @@
 """MCP tool definitions. Thin wrappers around App; descriptions are written for the agent."""
 
+import asyncio
 import logging
 import secrets
 import time
@@ -156,11 +157,16 @@ def create_server(app: App) -> MCPServer:
             "without a pvewarden snapshot; mention it to the user, it explains updates nobody asked for. "
             "'lock' is a Proxmox lock on the guest (e.g. 'backup'): updates, snapshots and reboots wait until "
             "it is gone. backup_running=true: a Proxmox backup runs on that node now, updates would be much "
-            "slower; suggest waiting until it is done. Without vmids, checks every running guest. Read-only."
+            "slower; suggest waiting until it is done. Without vmids, checks every running guest. Read-only. "
+            "Returns {guests: [...], pvewarden: {...}}. 'pvewarden' is about pvewarden itself: if it has "
+            "'new_version', tell the user that a newer pvewarden is out and how to upgrade ('upgrade'); "
+            "security_fix=true means the newer release fixes a security problem: say so first. You cannot "
+            "upgrade pvewarden yourself."
         ),
     )
-    async def check_updates(vmids: list[int] | None = None) -> list[dict]:
-        return await expose(app.check_updates(vmids))
+    async def check_updates(vmids: list[int] | None = None) -> dict:
+        guests, pvewarden = await asyncio.gather(expose(app.check_updates(vmids)), app.release.notice())
+        return {"guests": guests, "pvewarden": pvewarden}
 
     @mcp.tool(
         annotations=READ_ONLY,

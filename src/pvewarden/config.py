@@ -86,6 +86,8 @@ class Config:
     http: HTTPConfig | None = None
     addresses: dict[int, str] = field(default_factory=dict)
     static_guests: tuple[StaticGuest, ...] = ()
+    # ask GitHub once a day whether a newer pvewarden is out (pvewarden.release); only tells
+    check_new_version: bool = True
 
 
 def _section(data: dict, name: str, allowed: set[str], required: set[str] = frozenset()) -> dict:
@@ -102,7 +104,7 @@ def _section(data: dict, name: str, allowed: set[str], required: set[str] = froz
 
 
 def parse(data: dict) -> Config:
-    top = {"state_dir", "proxmox", "ssh", "policy", "http", "addresses", "static_guests"}
+    top = {"state_dir", "proxmox", "ssh", "policy", "http", "addresses", "static_guests", "check_new_version"}
     unknown = set(data) - top
     if unknown:
         raise ConfigError(f"unknown top-level keys {sorted(unknown)}")
@@ -179,6 +181,10 @@ def parse(data: dict) -> Config:
             )
         )
 
+    check_new_version = data.get("check_new_version", True)
+    if not isinstance(check_new_version, bool):
+        raise ConfigError("check_new_version must be true or false")
+
     if proxmox is None and not static:
         raise ConfigError("configure [proxmox] or, for testing without Proxmox, [[static_guests]]")
 
@@ -190,6 +196,7 @@ def parse(data: dict) -> Config:
         http=http,
         addresses=addresses,
         static_guests=tuple(static),
+        check_new_version=check_new_version,
     )
 
 
