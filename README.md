@@ -1,5 +1,7 @@
 # pvewarden
 
+[![matousfiser/pvewarden MCP server](https://glama.ai/mcp/servers/matousfiser/pvewarden/badges/score.svg)](https://glama.ai/mcp/servers/matousfiser/pvewarden)
+
 **Agent-safe patching of Proxmox VE guests over MCP.**
 
 pvewarden lets an AI agent keep your Proxmox VMs and containers up to date. It works with Claude Code

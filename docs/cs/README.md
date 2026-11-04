@@ -1,5 +1,7 @@
 # pvewarden
 
+[![matousfiser/pvewarden MCP server](https://glama.ai/mcp/servers/matousfiser/pvewarden/badges/score.svg)](https://glama.ai/mcp/servers/matousfiser/pvewarden)
+
 **Bezpečné aktualizace hostů v Proxmox VE pomocí AI agenta přes MCP.**
 
 S pvewarden může AI agent udržovat aktuální virtuální stroje a kontejnery na Proxmoxu. Funguje
