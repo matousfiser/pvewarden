@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/matousfiser/pvewarden/security/advisories/new
+    about: Report it privately, please, not in a public issue.
+  - name: Question or idea
+    url: https://github.com/matousfiser/pvewarden/discussions
+    about: Setup questions, how-tos and ideas that are not a concrete bug.

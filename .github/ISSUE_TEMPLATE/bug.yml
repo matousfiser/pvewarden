@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in pvewarden does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Before pasting output, remove tokens, passwords and anything else you
+        would not post publicly. A security problem goes to Security -> Report a vulnerability instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `pvewarden-setup doctor -v`
+      description: Run on the Proxmox host as root. Remove anything private.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: pvewarden version
+      placeholder: "0.1.7"
+    validations:
+      required: true
+  - type: input
+    id: pve
+    attributes:
+      label: Proxmox VE version (`pveversion`)
+      placeholder: "pve-manager/9.1.1"
+    validations:
+      required: true
+  - type: input
+    id: guest
+    attributes:
+      label: Guest OS and type, if a guest is involved
+      placeholder: "Debian 13, LXC"
+  - type: input
+    id: client
+    attributes:
+      label: MCP client, if the agent side is involved
+      placeholder: "the client and its version"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "In the server container: `journalctl -u pvewarden -n 100`, and the relevant lines of `/var/lib/pvewarden/audit.jsonl`."
+      render: text

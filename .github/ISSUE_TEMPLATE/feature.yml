@@ -1,0 +1,21 @@
+name: Feature request
+description: Something pvewarden should do, or do differently.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        pvewarden gives agents narrow, fixed abilities on purpose (see docs/security.md). Ideas that
+        keep that model are the easiest to accept; please say how yours would fit it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The situation and what is missing today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: Including what an agent could and could not do with it.
