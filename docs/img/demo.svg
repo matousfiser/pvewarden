@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="790" viewBox="0 0 960 790" role="img"
+ aria-label="Claude Code session with pvewarden: the agent checks updates on six Proxmox guests, installs security updates on one with a snapshot first, then asks for a rollback; pvewarden shows a confirmation dialog, the user declines and nothing changes.">
+<style>
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace;font-size:13.2px;white-space:pre}
+.pulse{animation:pulse 1.2s ease-in-out infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes a1{0%,1.765%{opacity:0}1.882%,7.794%{opacity:1}7.912%,100%{opacity:0}}.a1{animation:a1 34.0s linear infinite}
+@keyframes t2{0%,2.647%{transform:translateX(0)}6.324%,100%{transform:translateX(200.8px)}}.t2{animation:t2 34.0s steps(25) infinite}
+@keyframes a3{0%,7.794%{opacity:0}7.912%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a3{animation:a3 34.0s linear infinite}
+@keyframes a4{0%,8.676%{opacity:0}8.794%,17.206%{opacity:1}17.324%,100%{opacity:0}}.a4{animation:a4 34.0s linear infinite}
+@keyframes a5{0%,10.147%{opacity:0}10.265%,16.324%{opacity:1}16.441%,100%{opacity:0}}.a5{animation:a5 34.0s linear infinite}
+@keyframes a6{0%,16.324%{opacity:0}16.441%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a6{animation:a6 34.0s linear infinite}
+@keyframes a7{0%,16.324%{opacity:0}16.441%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a7{animation:a7 34.0s linear infinite}
+@keyframes a8{0%,16.324%{opacity:0}16.441%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a8{animation:a8 34.0s linear infinite}
+@keyframes a9{0%,18.088%{opacity:0}18.206%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a9{animation:a9 34.0s linear infinite}
+@keyframes a10{0%,18.441%{opacity:0}18.559%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a10{animation:a10 34.0s linear infinite}
+@keyframes a11{0%,18.794%{opacity:0}18.912%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a11{animation:a11 34.0s linear infinite}
+@keyframes a12{0%,19.147%{opacity:0}19.265%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a12{animation:a12 34.0s linear infinite}
+@keyframes a13{0%,19.500%{opacity:0}19.618%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a13{animation:a13 34.0s linear infinite}
+@keyframes a14{0%,25.147%{opacity:0}25.265%,33.088%{opacity:1}33.206%,100%{opacity:0}}.a14{animation:a14 34.0s linear infinite}
+@keyframes t15{0%,26.029%{transform:translateX(0)}31.618%,100%{transform:translateX(304.1px)}}.t15{animation:t15 34.0s steps(38) infinite}
+@keyframes a16{0%,33.088%{opacity:0}33.206%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a16{animation:a16 34.0s linear infinite}
+@keyframes a17{0%,33.971%{opacity:0}34.088%,44.559%{opacity:1}44.676%,100%{opacity:0}}.a17{animation:a17 34.0s linear infinite}
+@keyframes a18{0%,35.441%{opacity:0}35.559%,43.676%{opacity:1}43.794%,100%{opacity:0}}.a18{animation:a18 34.0s linear infinite}
+@keyframes a19{0%,43.676%{opacity:0}43.794%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a19{animation:a19 34.0s linear infinite}
+@keyframes a20{0%,43.676%{opacity:0}43.794%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a20{animation:a20 34.0s linear infinite}
+@keyframes a21{0%,43.676%{opacity:0}43.794%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a21{animation:a21 34.0s linear infinite}
+@keyframes a22{0%,45.441%{opacity:0}45.559%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a22{animation:a22 34.0s linear infinite}
+@keyframes a23{0%,45.794%{opacity:0}45.912%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a23{animation:a23 34.0s linear infinite}
+@keyframes a24{0%,51.441%{opacity:0}51.559%,58.647%{opacity:1}58.765%,100%{opacity:0}}.a24{animation:a24 34.0s linear infinite}
+@keyframes t25{0%,52.324%{transform:translateX(0)}57.176%,100%{transform:translateX(264.4px)}}.t25{animation:t25 34.0s steps(33) infinite}
+@keyframes a26{0%,58.647%{opacity:0}58.765%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a26{animation:a26 34.0s linear infinite}
+@keyframes a27{0%,59.529%{opacity:0}59.647%,62.176%{opacity:1}62.294%,100%{opacity:0}}.a27{animation:a27 34.0s linear infinite}
+@keyframes a28{0%,61.000%{opacity:0}61.118%,76.294%{opacity:1}76.412%,100%{opacity:0}}.a28{animation:a28 34.0s linear infinite}
+@keyframes a29{0%,76.294%{opacity:0}76.412%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a29{animation:a29 34.0s linear infinite}
+@keyframes a30{0%,0.000%{opacity:0}0.118%,62.176%{opacity:1}62.294%,100%{opacity:0}}.a30{animation:a30 34.0s linear infinite}
+@keyframes a31{0%,0.000%{opacity:0}0.118%,62.176%{opacity:1}62.294%,100%{opacity:0}}.a31{animation:a31 34.0s linear infinite}
+@keyframes a32{0%,0.000%{opacity:0}0.118%,62.176%{opacity:1}62.294%,100%{opacity:0}}.a32{animation:a32 34.0s linear infinite}
+@keyframes a33{0%,75.706%{opacity:0}75.824%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a33{animation:a33 34.0s linear infinite}
+@keyframes a34{0%,75.706%{opacity:0}75.824%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a34{animation:a34 34.0s linear infinite}
+@keyframes a35{0%,75.706%{opacity:0}75.824%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a35{animation:a35 34.0s linear infinite}
+@keyframes a36{0%,62.176%{opacity:0}62.294%,75.706%{opacity:1}75.824%,100%{opacity:0}}.a36{animation:a36 34.0s linear infinite}
+@keyframes a37{0%,62.176%{opacity:0}62.294%,75.706%{opacity:1}75.824%,100%{opacity:0}}.a37{animation:a37 34.0s linear infinite}
+@keyframes a38{0%,62.176%{opacity:0}62.294%,75.706%{opacity:1}75.824%,100%{opacity:0}}.a38{animation:a38 34.0s linear infinite}
+@keyframes a39{0%,62.176%{opacity:0}62.294%,75.706%{opacity:1}75.824%,100%{opacity:0}}.a39{animation:a39 34.0s linear infinite}
+@keyframes a40{0%,62.176%{opacity:0}62.294%,75.706%{opacity:1}75.824%,100%{opacity:0}}.a40{animation:a40 34.0s linear infinite}
+@keyframes a41{0%,62.176%{opacity:0}62.294%,69.235%{opacity:1}69.353%,100%{opacity:0}}.a41{animation:a41 34.0s linear infinite}
+@keyframes a42{0%,69.235%{opacity:0}69.353%,75.706%{opacity:1}75.824%,100%{opacity:0}}.a42{animation:a42 34.0s linear infinite}
+@keyframes a43{0%,62.176%{opacity:0}62.294%,69.235%{opacity:1}69.353%,100%{opacity:0}}.a43{animation:a43 34.0s linear infinite}
+@keyframes a44{0%,69.235%{opacity:0}69.353%,75.706%{opacity:1}75.824%,100%{opacity:0}}.a44{animation:a44 34.0s linear infinite}
+@keyframes a45{0%,62.176%{opacity:0}62.294%,75.706%{opacity:1}75.824%,100%{opacity:0}}.a45{animation:a45 34.0s linear infinite}
+@keyframes a46{0%,76.294%{opacity:0}76.412%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a46{animation:a46 34.0s linear infinite}
+@keyframes a47{0%,78.647%{opacity:0}78.765%,97.059%{opacity:1}97.176%,100%{opacity:0}}.a47{animation:a47 34.0s linear infinite}
+</style>
+<rect width="960" height="790" rx="10" fill="#1a1a1a"/>
+<rect width="960" height="30" rx="10" fill="#2a2a2a"/><rect y="20" width="960" height="10" fill="#2a2a2a"/>
+<circle cx="20" cy="15" r="5.5" fill="#ff5f57"/><circle cx="38" cy="15" r="5.5" fill="#febc2e"/><circle cx="56" cy="15" r="5.5" fill="#28c840"/>
+<text x="480.0" y="19.5" text-anchor="middle" fill="#8c8c8c" style="font-size:12px">claude — pvewarden demo · real run, guest names shortened</text>
+<g class="a1"><text x="47.9" y="736"><tspan fill="#e6e6e6">What updates are pending?</tspan></text><rect class="t2" x="46.9" y="720" width="212.8" height="22" fill="#1a1a1a"/><rect class="t2" x="47.9" y="723" width="8.0" height="17" fill="#e6e6e6" opacity=".7"/></g>
+<text class="a3" x="20.0" y="50.0"><tspan fill="#a6a6a6">&gt; What updates are pending?</tspan></text>
+<g class="a4"><text x="20" y="702"><tspan class="pulse" fill="#d77757">✻ </tspan><tspan fill="#d77757">Checking… </tspan><tspan fill="#8c8c8c">(esc to interrupt)</tspan></text></g>
+<text class="a5" x="20.0" y="80.0"><tspan fill="#8c8c8c">●</tspan><tspan fill="#e6e6e6" font-weight="bold"> pvewarden - check_updates (MCP)</tspan><tspan fill="#e6e6e6"></tspan></text>
+<text class="a6" x="20.0" y="80.0"><tspan fill="#4eba65">●</tspan><tspan fill="#e6e6e6" font-weight="bold"> pvewarden - check_updates (MCP)</tspan><tspan fill="#e6e6e6"></tspan></text>
+<text class="a7" x="20.0" y="100.0"><tspan fill="#8c8c8c">  ⎿  </tspan><tspan fill="#8c8c8c">{"guests": [{"vmid": 100, "name": "lb", "os": "Ubuntu 22.04.5 LTS", "pending": 3, …</tspan></text>
+<text class="a8" x="20.0" y="120.0"><tspan fill="#8c8c8c">     … +1990 lines (ctrl+o to expand)</tspan></text>
+<text class="a9" x="20.0" y="150.0"><tspan fill="#e6e6e6">● </tspan><tspan fill="#e6e6e6">6 guests checked. Security updates are pending on two:</tspan></text>
+<text class="a10" x="20.0" y="170.0"><tspan fill="#e6e6e6">  </tspan><tspan fill="#e6e6e6">- ct101 git (Ubuntu 22.04): 6 updates, 4 security (apt). forgejo comes from a third-party repo.</tspan></text>
+<text class="a11" x="20.0" y="190.0"><tspan fill="#e6e6e6">  </tspan><tspan fill="#e6e6e6">- vm106 web (Ubuntu 24.04): 94 updates, 4 security. A reboot is already pending.</tspan></text>
+<text class="a12" x="20.0" y="210.0"><tspan fill="#e6e6e6">  </tspan><tspan fill="#e6e6e6">- vm103 jump, ct100 lb, vm107 app, vm111 agent: 2–11 regular updates, nothing security-related.</tspan></text>
+<text class="a13" x="20.0" y="230.0"><tspan fill="#e6e6e6">  </tspan><tspan fill="#e6e6e6">Docker, Node.js, Jenkins and Telegraf come from third-party repos: reported, never installed.</tspan></text>
+<g class="a14"><text x="47.9" y="736"><tspan fill="#e6e6e6">Install the security updates on ct101.</tspan></text><rect class="t15" x="46.9" y="720" width="316.1" height="22" fill="#1a1a1a"/><rect class="t15" x="47.9" y="723" width="8.0" height="17" fill="#e6e6e6" opacity=".7"/></g>
+<text class="a16" x="20.0" y="260.0"><tspan fill="#a6a6a6">&gt; Install the security updates on ct101.</tspan></text>
+<g class="a17"><text x="20" y="702"><tspan class="pulse" fill="#d77757">✻ </tspan><tspan fill="#d77757">Updating… </tspan><tspan fill="#8c8c8c">(esc to interrupt)</tspan></text></g>
+<text class="a18" x="20.0" y="290.0"><tspan fill="#8c8c8c">●</tspan><tspan fill="#e6e6e6" font-weight="bold"> pvewarden - apply_updates (MCP)</tspan><tspan fill="#e6e6e6">(vmid: 101, mode: "security")</tspan></text>
+<text class="a19" x="20.0" y="290.0"><tspan fill="#4eba65">●</tspan><tspan fill="#e6e6e6" font-weight="bold"> pvewarden - apply_updates (MCP)</tspan><tspan fill="#e6e6e6">(vmid: 101, mode: "security")</tspan></text>
+<text class="a20" x="20.0" y="310.0"><tspan fill="#8c8c8c">  ⎿  </tspan><tspan fill="#8c8c8c">{"vmid": 101, "snapshot": "pvewarden_20261105_123003", "ok": true, "reboot_required": false, …</tspan></text>
+<text class="a21" x="20.0" y="330.0"><tspan fill="#8c8c8c">     … +22 lines (ctrl+o to expand)</tspan></text>
+<text class="a22" x="20.0" y="360.0"><tspan fill="#e6e6e6">● </tspan><tspan fill="#e6e6e6">Done. ct101 got 4 packages (apt 2.4.14 → 2.4.15ubuntu0.1) in 30 s, after snapshot</tspan></text>
+<text class="a23" x="20.0" y="380.0"><tspan fill="#e6e6e6">  </tspan><tspan fill="#e6e6e6">pvewarden_20261105_123003. Services are running, no reboot needed.</tspan></text>
+<g class="a24"><text x="47.9" y="736"><tspan fill="#e6e6e6">Roll ct101 back to that snapshot.</tspan></text><rect class="t25" x="46.9" y="720" width="276.4" height="22" fill="#1a1a1a"/><rect class="t25" x="47.9" y="723" width="8.0" height="17" fill="#e6e6e6" opacity=".7"/></g>
+<text class="a26" x="20.0" y="410.0"><tspan fill="#a6a6a6">&gt; Roll ct101 back to that snapshot.</tspan></text>
+<g class="a27"><text x="20" y="702"><tspan class="pulse" fill="#d77757">✻ </tspan><tspan fill="#d77757">Rolling back… </tspan><tspan fill="#8c8c8c">(esc to interrupt)</tspan></text></g>
+<text class="a28" x="20.0" y="440.0"><tspan fill="#8c8c8c">●</tspan><tspan fill="#e6e6e6" font-weight="bold"> pvewarden - rollback_snapshot (MCP)</tspan><tspan fill="#e6e6e6">(vmid: 101, snapshot: "pvewarden_20261105_123003")</tspan></text>
+<text class="a29" x="20.0" y="440.0"><tspan fill="#ff6b80">●</tspan><tspan fill="#e6e6e6" font-weight="bold"> pvewarden - rollback_snapshot (MCP)</tspan><tspan fill="#e6e6e6">(vmid: 101, snapshot: "pvewarden_20261105_123003")</tspan></text>
+<rect class="a30" x="20" y="714" width="920" height="34" rx="6" fill="none" stroke="#555555" stroke-width="1"/>
+<text class="a31" x="32.0" y="736.0"><tspan fill="#e6e6e6">&gt; </tspan></text>
+<text class="a32" x="32.0" y="764.0"><tspan fill="#8c8c8c">? for shortcuts</tspan></text>
+<rect class="a33" x="20" y="714" width="920" height="34" rx="6" fill="none" stroke="#555555" stroke-width="1"/>
+<text class="a34" x="32.0" y="736.0"><tspan fill="#e6e6e6">&gt; </tspan></text>
+<text class="a35" x="32.0" y="764.0"><tspan fill="#8c8c8c">? for shortcuts</tspan></text>
+<rect class="a36" x="20" y="590" width="920" height="170" rx="6" fill="#1a1a1a" stroke="#b1b9f9" stroke-width="1"/>
+<text class="a37" x="34.0" y="614.0"><tspan fill="#b1b9f9" font-weight="bold">MCP server pvewarden asks for confirmation</tspan></text>
+<text class="a38" x="34.0" y="642.0"><tspan fill="#e6e6e6">Roll back git (VMID 101) to snapshot pvewarden_20261105_123003, taken 2026-11-05</tspan></text>
+<text class="a39" x="34.0" y="662.0"><tspan fill="#e6e6e6">12:30 UTC (before security updates)? Everything written on the guest since then is lost.</tspan></text>
+<text class="a40" x="34.0" y="690.0"><tspan fill="#e6e6e6">Yes, do it  </tspan><tspan fill="#8c8c8c">[ ]</tspan></text>
+<text class="a41" x="34.0" y="718.0"><tspan fill="#b1b9f9">❯ Accept</tspan></text>
+<text class="a42" x="34.0" y="718.0"><tspan fill="#e6e6e6">  Accept</tspan></text>
+<text class="a43" x="34.0" y="738.0"><tspan fill="#e6e6e6">  Decline</tspan></text>
+<text class="a44" x="34.0" y="738.0"><tspan fill="#b1b9f9">❯ Decline</tspan></text>
+<text class="a45" x="34.0" y="758.0"><tspan fill="#e6e6e6">  Cancel</tspan></text>
+<text class="a46" x="20.0" y="460.0"><tspan fill="#8c8c8c">  ⎿  </tspan><tspan fill="#ff6b80">Error: the user did not confirm this action; nothing was changed</tspan></text>
+<text class="a47" x="20.0" y="490.0"><tspan fill="#e6e6e6">● </tspan><tspan fill="#e6e6e6">You declined, so nothing was rolled back. ct101 stays updated and the snapshot is kept.</tspan></text>
+</svg>

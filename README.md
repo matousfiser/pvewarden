@@ -15,16 +15,11 @@ and the server decide what it may do, not the prompt.
 > and Ubuntu 22.04/24.04/26.04 guests, containers and VMs. The server tells your agent when a new
 > release is out. Feedback and issues are welcome.
 
-```
-You:    What updates are pending?
-Agent:  ct101 (Debian 13): 4 security updates. vm110 (Debian 13): nothing pending.
-        ct100 (Ubuntu 24.04): 12 updates, 3 of them security; docker-ce 29.1 → 29.2 comes from a
-        third-party repository, so pvewarden only reports it.
-You:    Install the security updates.
-Agent:  ct101: snapshot pvewarden_20261031_145241, 4 packages installed, services OK, no reboot needed.
-        ct100: the guest is being backed up by Proxmox right now. Nothing was changed; I'll try
-        again when the backup is done.
-```
+![An agent checks updates on six Proxmox guests, installs security updates on one with a snapshot first, then asks for a rollback; pvewarden asks the user to confirm, the user declines and nothing changes.](docs/img/demo.svg)
+
+*Real calls and results from a home Proxmox server, drawn as a Claude Code session (guest names
+shortened, the agent's replies condensed). The rollback dialog comes from pvewarden, not from the
+agent: only you can confirm it.*
 
 ## Quick start
 
