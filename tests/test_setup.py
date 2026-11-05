@@ -695,6 +695,23 @@ def test_token_rotation(host):
     assert len(add) == 1 and add[0].rstrip().endswith('Bearer NEW-TOKEN-FOR-claude"'), add
 
 
+def test_token_takes_the_agent_name_as_an_argument(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    r = host.run("token", "demo", "--yes")
+    assert r.returncode == 0, r.stderr
+    assert "pct exec 120 -- /usr/local/bin/pvewarden token demo" in host.calls()
+    assert "NEW-TOKEN-FOR-demo" in r.stdout
+
+
+def test_token_without_a_name_still_works(host):
+    host.state.mkdir()
+    (host.state / "setup.conf").write_text("CTID=120\nLISTEN=192.0.2.50\nCT_IP=192.0.2.50\n")
+    r = host.run("token", "--yes")
+    assert r.returncode == 0, r.stderr
+    assert "pct exec 120 -- /usr/local/bin/pvewarden token agent" in host.calls()
+
+
 @pytest.mark.parametrize("name", ["a b", "x;rm", "../x"])
 def test_token_rotation_rejects_odd_names(host, name):
     host.state.mkdir()

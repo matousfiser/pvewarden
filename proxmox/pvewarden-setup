@@ -1,6 +1,6 @@
 #!/bin/bash
 # pvewarden-setup — install, upgrade or remove pvewarden. Run as root on a Proxmox VE host.
-#   pvewarden-setup [install|upgrade|enroll|connect|token|renew-cert|doctor|uninstall] [--yes] [--dry-run] [--source DIR|TARBALL]
+#   pvewarden-setup [install|upgrade|enroll|connect|token [name]|renew-cert|doctor|uninstall] [--yes] [--dry-run] [--source DIR|TARBALL]
 #     no command      interactive menu
 #     doctor [-v]     check the installation (pvewarden doctor in the server container)
 #     --yes           take defaults / PVEWARDEN_* environment variables instead of asking
@@ -1252,7 +1252,15 @@ usage() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    install | upgrade | enroll | connect | token | doctor | uninstall) COMMAND=$1 ;;
+    install | upgrade | enroll | connect | doctor | uninstall) COMMAND=$1 ;;
+    token)
+      COMMAND=token
+      # optional agent name: pvewarden-setup token <name>
+      if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then
+        PVEWARDEN_CLIENT=$2
+        shift
+      fi
+      ;;
     renew-cert) COMMAND=renew_cert ;;
     --yes | -y) YES=1 ;;
     --dry-run) DRY_RUN=1 ;;
