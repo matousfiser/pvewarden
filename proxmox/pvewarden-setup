@@ -1257,6 +1257,7 @@ while [ $# -gt 0 ]; do
       COMMAND=token
       # optional agent name: pvewarden-setup token <name>
       if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then
+        # shellcheck disable=SC2034  # read indirectly by env_or (ask CLIENT)
         PVEWARDEN_CLIENT=$2
         shift
       fi
