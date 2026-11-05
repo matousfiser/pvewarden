@@ -10,6 +10,8 @@ servers tell their agents about it (see docs/security.md, "New versions").
   before a rollback or deletion, check_updates to look and apply_updates to install.
 - `check_services` refuses a guest that is not running with a clear message instead of an SSH
   timeout. `delete_old_snapshots` refuses a negative age.
+- Docs are English only; the Czech translation was dropped, since keeping two versions in step
+  did not work. The README starts with a quick start.
 
 ## 0.1.7 (2026-11-04)
 

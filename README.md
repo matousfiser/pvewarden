@@ -9,10 +9,11 @@ or any other MCP client. The agent checks pending updates, takes a snapshot, ins
 verifies services. It never gets a shell or root. It can only call a small set of tools, and Proxmox
 and the server decide what it may do, not the prompt.
 
-> **Status:** v0.1, the first release. Tested on Proxmox VE 9 with Debian 12/13 and Ubuntu
-> 22.04/24.04/26.04 guests, containers and VMs. Feedback and issues are welcome.
+**[Quick start](#quick-start) · [Why it is safe](#why-it-is-safe-to-hand-to-an-agent) · [Tools](#tools) · [Docs](#documentation)**
 
-[Česky](docs/cs/README.md)
+> **Status:** early (0.1.x), in daily use by its author. Tested on Proxmox VE 9 with Debian 12/13
+> and Ubuntu 22.04/24.04/26.04 guests, containers and VMs. The server tells your agent when a new
+> release is out. Feedback and issues are welcome.
 
 ```
 You:    What updates are pending?
@@ -24,6 +25,23 @@ Agent:  ct101: snapshot pvewarden_20261031_145241, 4 packages installed, service
         ct100: the guest is being backed up by Proxmox right now. Nothing was changed; I'll try
         again when the backup is done.
 ```
+
+## Quick start
+
+You need Proxmox VE 8 or 9, Debian or Ubuntu guests on storage that can take snapshots, and an MCP
+client such as Claude Code ([full requirements](#requirements)). On a Proxmox node, as root:
+
+```
+curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pvewarden-setup
+less pvewarden-setup        # a readable shell script, worth a look before running it as root
+bash pvewarden-setup install
+```
+
+In about five minutes the wizard creates a small server container, a Proxmox token limited to one
+pool, and enrolls the guests you pick. It ends with one command to paste on your computer to connect
+your agent. Then ask it: *"What updates are pending?"*
+
+[What the installer does](#install) · [Step by step](docs/install.md)
 
 ## Why it is safe to hand to an agent
 
@@ -48,6 +66,8 @@ Details: [docs/security.md](docs/security.md).
 - Guests: Debian 12/13 or Ubuntu 22.04+, as LXC containers or VMs.
   - VMs need the QEMU guest agent, so pvewarden can find their address and enroll them
     ([how to add it](docs/install.md#before-you-start)).
+  - Guest disks must be on storage that supports snapshots (ZFS, LVM-thin, Ceph RBD, qcow2).
+    Updates of guests on plain LVM or raw files are refused.
 - An MCP client that supports streamable HTTP. Claude Code works. For the confirmation dialogs the
   client must support MCP elicitation. Without it, rollback and the other confirmed actions are
   refused; see [configuration](docs/configuration.md#policy).
@@ -57,15 +77,7 @@ Details: [docs/security.md](docs/security.md).
 
 ## Install
 
-On a Proxmox node, as root:
-
-```
-curl -fsSLO https://github.com/matousfiser/pvewarden/releases/latest/download/pvewarden-setup
-less pvewarden-setup        # it is a readable shell script, worth a look before running it as root
-bash pvewarden-setup
-```
-
-`pvewarden-setup` checks the checksum of everything it downloads. Checking the script itself is
+The commands are in [Quick start](#quick-start). `pvewarden-setup` checks the checksum of everything it downloads. Checking the script itself is
 optional: compare
 `sha256sum pvewarden-setup` with `SHA256SUMS` on the [release page](https://github.com/matousfiser/pvewarden/releases/latest).
 Release files also carry a signed build provenance: with the GitHub CLI,
